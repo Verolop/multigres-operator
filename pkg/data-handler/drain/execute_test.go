@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
-	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,245 +25,13 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
 
-// mockRPCClient implements just the methods we need
+// mockRPCClient implements just the methods these drain tests exercise.
 type mockRPCClient struct {
-	promoteCalled       bool
-	updateStandbyCalled bool
-}
+	rpcclient.MultiPoolerClient
 
-func (m *mockRPCClient) BeginTerm(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *consensusdatapb.BeginTermRequest,
-) (*consensusdatapb.BeginTermResponse, error) {
-	return nil, nil
+	promoteCalled             bool
+	updateConsensusRuleCalled bool
 }
-
-func (m *mockRPCClient) ConsensusStatus(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *consensusdatapb.StatusRequest,
-) (*consensusdatapb.StatusResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) GetLeadershipView(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *consensusdatapb.LeadershipViewRequest,
-) (*consensusdatapb.LeadershipViewResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) CanReachPrimary(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *consensusdatapb.CanReachPrimaryRequest,
-) (*consensusdatapb.CanReachPrimaryResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) State(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StateRequest,
-) (*multipoolermanagerdatapb.StateResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) WaitForLSN(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.WaitForLSNRequest,
-) (*multipoolermanagerdatapb.WaitForLSNResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) SetPrimaryConnInfo(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.SetPrimaryConnInfoRequest,
-) (*multipoolermanagerdatapb.SetPrimaryConnInfoResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) StartReplication(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StartReplicationRequest,
-) (*multipoolermanagerdatapb.StartReplicationResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) StopReplication(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StopReplicationRequest,
-) (*multipoolermanagerdatapb.StopReplicationResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) StandbyReplicationStatus(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StandbyReplicationStatusRequest,
-) (*multipoolermanagerdatapb.StandbyReplicationStatusResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) Status(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StatusRequest,
-) (*multipoolermanagerdatapb.StatusResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) ResetReplication(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.ResetReplicationRequest,
-) (*multipoolermanagerdatapb.ResetReplicationResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) StopReplicationAndGetStatus(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.StopReplicationAndGetStatusRequest,
-) (*multipoolermanagerdatapb.StopReplicationAndGetStatusResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) ConfigureSynchronousReplication(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest,
-) (*multipoolermanagerdatapb.ConfigureSynchronousReplicationResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) PrimaryStatus(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.PrimaryStatusRequest,
-) (*multipoolermanagerdatapb.PrimaryStatusResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) PrimaryPosition(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.PrimaryPositionRequest,
-) (*multipoolermanagerdatapb.PrimaryPositionResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) GetFollowers(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.GetFollowersRequest,
-) (*multipoolermanagerdatapb.GetFollowersResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) EmergencyDemote(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.EmergencyDemoteRequest,
-) (*multipoolermanagerdatapb.EmergencyDemoteResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) UndoDemote(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.UndoDemoteRequest,
-) (*multipoolermanagerdatapb.UndoDemoteResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) DemoteStalePrimary(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.DemoteStalePrimaryRequest,
-) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) ChangeType(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.ChangeTypeRequest,
-) (*multipoolermanagerdatapb.ChangeTypeResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) GetDurabilityPolicy(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.GetDurabilityPolicyRequest,
-) (*multipoolermanagerdatapb.GetDurabilityPolicyResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) CreateDurabilityPolicy(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.CreateDurabilityPolicyRequest,
-) (*multipoolermanagerdatapb.CreateDurabilityPolicyResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) Backup(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.BackupRequest,
-) (*multipoolermanagerdatapb.BackupResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) RestoreFromBackup(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.RestoreFromBackupRequest,
-) (*multipoolermanagerdatapb.RestoreFromBackupResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) GetBackups(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.GetBackupsRequest,
-) (*multipoolermanagerdatapb.GetBackupsResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) GetBackupByJobId(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.GetBackupByJobIdRequest,
-) (*multipoolermanagerdatapb.GetBackupByJobIdResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) RewindToSource(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.RewindToSourceRequest,
-) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) SetPostgresRestartsEnabled(
-	ctx context.Context,
-	pooler *clustermetadata.MultiPooler,
-	request *multipoolermanagerdatapb.SetPostgresRestartsEnabledRequest,
-) (*multipoolermanagerdatapb.SetPostgresRestartsEnabledResponse, error) {
-	return nil, nil
-}
-func (m *mockRPCClient) Close()                                          {}
-func (m *mockRPCClient) CloseTablet(pooler *clustermetadata.MultiPooler) {}
 
 func (m *mockRPCClient) Promote(
 	ctx context.Context,
@@ -274,12 +42,12 @@ func (m *mockRPCClient) Promote(
 	return &multipoolermanagerdatapb.PromoteResponse{}, nil
 }
 
-func (m *mockRPCClient) UpdateSynchronousStandbyList(
+func (m *mockRPCClient) UpdateConsensusRule(
 	ctx context.Context,
 	pooler *clustermetadata.MultiPooler,
 	request *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest,
 ) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
-	m.updateStandbyCalled = true
+	m.updateConsensusRuleCalled = true
 	return &multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{}, nil
 }
 
@@ -380,8 +148,8 @@ func TestReplicaDrainFlow(t *testing.T) {
 	if pod.Annotations[metadata.AnnotationDrainState] != metadata.DrainStateDraining {
 		t.Fatalf("expected state draining, got %v", pod.Annotations[metadata.AnnotationDrainState])
 	}
-	if !rpcMock.updateStandbyCalled {
-		t.Fatalf("expected UpdateSynchronousStandbyList to be called")
+	if !rpcMock.updateConsensusRuleCalled {
+		t.Fatalf("expected UpdateConsensusRule to be called")
 	}
 
 	// Step 2: Draining -> Acknowledged
@@ -492,8 +260,8 @@ func TestPrimaryDrainFlow(t *testing.T) {
 	if rpcMock.promoteCalled {
 		t.Fatalf("Promote should not be called; failover is multiorch's responsibility")
 	}
-	if rpcMock.updateStandbyCalled {
-		t.Fatalf("UpdateSynchronousStandbyList should not be called when draining the PRIMARY")
+	if rpcMock.updateConsensusRuleCalled {
+		t.Fatalf("UpdateConsensusRule should not be called when draining the PRIMARY")
 	}
 }
 
@@ -803,8 +571,8 @@ func TestReplicaDrain_SkipsRPCWhenPrimaryDraining(t *testing.T) {
 	}
 
 	// The RPC should NOT have been called because primary is draining
-	if rpcMock.updateStandbyCalled {
-		t.Error("UpdateSynchronousStandbyList should NOT be called when primary is draining")
+	if rpcMock.updateConsensusRuleCalled {
+		t.Error("UpdateConsensusRule should NOT be called when primary is draining")
 	}
 
 	// The drain state should NOT have advanced (still "requested")
@@ -964,8 +732,8 @@ func TestReplicaDrain_DrainingState_PrimaryDraining(t *testing.T) {
 		t.Errorf("expected state to remain Draining, got %s",
 			replicaPod.Annotations[metadata.AnnotationDrainState])
 	}
-	if rpcMock.updateStandbyCalled {
-		t.Error("should not call UpdateSynchronousStandbyList when primary is draining")
+	if rpcMock.updateConsensusRuleCalled {
+		t.Error("should not call UpdateConsensusRule when primary is draining")
 	}
 }
 
@@ -1121,7 +889,7 @@ func TestReplicaDrain_PrimaryTerminatingOrMissing(t *testing.T) {
 	if replicaPod.Annotations[metadata.AnnotationDrainState] != metadata.DrainStateDraining {
 		t.Errorf("expected Draining, got %s", replicaPod.Annotations[metadata.AnnotationDrainState])
 	}
-	if rpcMock.updateStandbyCalled {
+	if rpcMock.updateConsensusRuleCalled {
 		t.Error("should skip standby removal when primary is terminating")
 	}
 }
@@ -1212,7 +980,7 @@ func TestReplicaDrain_DrainingState_PrimaryTerminating(t *testing.T) {
 			replicaPod.Annotations[metadata.AnnotationDrainState],
 		)
 	}
-	if rpcMock.updateStandbyCalled {
+	if rpcMock.updateConsensusRuleCalled {
 		t.Error("should skip standby removal verification when primary is terminating")
 	}
 }
@@ -1470,7 +1238,7 @@ func TestReplicaDrain_RPCError(t *testing.T) {
 		Database: "test-db", TableGroup: "test-tg", Shard: "0",
 	}, false)
 
-	// RPC error on UpdateSynchronousStandbyList should requeue
+	// RPC error on UpdateConsensusRule should requeue
 	requeue, err := drain.ExecuteDrainStateMachine(
 		ctx,
 		c,
@@ -1577,12 +1345,12 @@ func TestReplicaDrain_DrainingState_RPCError(t *testing.T) {
 	}
 }
 
-// failingRPCClient returns errors for UpdateSynchronousStandbyList.
+// failingRPCClient returns errors for UpdateConsensusRule.
 type failingRPCClient struct {
 	mockRPCClient
 }
 
-func (m *failingRPCClient) UpdateSynchronousStandbyList(
+func (m *failingRPCClient) UpdateConsensusRule(
 	ctx context.Context,
 	pooler *clustermetadata.MultiPooler,
 	request *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest,

@@ -167,7 +167,7 @@ func ExecuteDrainStateMachine(
 						StandbyIds:   []*clustermetadatapb.ID{myPooler.Id},
 						ReloadConfig: true,
 					}
-					_, rpcErr := rpcClient.UpdateSynchronousStandbyList(ctx, primary, req)
+					_, rpcErr := rpcClient.UpdateConsensusRule(ctx, primary, req)
 					if rpcErr != nil {
 						logger.Error(
 							rpcErr,
@@ -222,7 +222,7 @@ func ExecuteDrainStateMachine(
 						StandbyIds:   []*clustermetadatapb.ID{myPooler.Id},
 						ReloadConfig: true,
 					}
-					_, rpcErr := rpcClient.UpdateSynchronousStandbyList(ctx, primary, req)
+					_, rpcErr := rpcClient.UpdateConsensusRule(ctx, primary, req)
 					if rpcErr != nil {
 						logger.Error(
 							rpcErr,

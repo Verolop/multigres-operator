@@ -53,7 +53,7 @@ type mockMultiPoolerClient struct {
 	updateSynchronousStandbyListFunc func(ctx context.Context, pooler *clustermetadata.MultiPooler, req *multipoolermanagerdata.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdata.UpdateSynchronousStandbyListResponse, error)
 }
 
-func (m *mockMultiPoolerClient) UpdateSynchronousStandbyList(
+func (m *mockMultiPoolerClient) UpdateConsensusRule(
 	ctx context.Context,
 	pooler *clustermetadata.MultiPooler,
 	req *multipoolermanagerdata.UpdateSynchronousStandbyListRequest,
