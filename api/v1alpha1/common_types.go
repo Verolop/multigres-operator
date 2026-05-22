@@ -228,13 +228,10 @@ type PostgresPasswordSecretRef struct {
 	Name string `json:"name"`
 
 	// Key is the Secret data key containing the password.
-	// Defaults to "password".
-	// +optional
-	// +kubebuilder:default="password"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
-	Key string `json:"key,omitempty"`
+	Key string `json:"key"`
 }
 
 const (

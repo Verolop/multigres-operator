@@ -81,7 +81,7 @@ func TestBuildTableGroup(t *testing.T) {
 
 	t.Run("PostgresPasswordSecretRef", func(t *testing.T) {
 		c := *cluster
-		c.Spec.PostgresPasswordSecretRef = &multigresv1alpha1.PostgresPasswordSecretRef{
+		c.Spec.PostgresPasswordSecretRef = multigresv1alpha1.PostgresPasswordSecretRef{
 			Name: "multigres-admin-password",
 			Key:  "current",
 		}
@@ -89,9 +89,6 @@ func TestBuildTableGroup(t *testing.T) {
 		got, err := BuildTableGroup(&c, dbCfg, tgCfg, nil, globalTopoRef, scheme)
 		if err != nil {
 			t.Fatalf("BuildTableGroup() error = %v", err)
-		}
-		if got.Spec.PostgresPasswordSecretRef == nil {
-			t.Fatal("PostgresPasswordSecretRef = nil, want propagated ref")
 		}
 		if got.Spec.PostgresPasswordSecretRef.Name != "multigres-admin-password" {
 			t.Errorf(
