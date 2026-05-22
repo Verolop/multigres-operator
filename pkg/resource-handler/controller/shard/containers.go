@@ -380,7 +380,7 @@ func buildMultiPoolerContainer(
 		"--http-port=15200",
 		"--grpc-port=15270",
 		"--pooler-dir=" + PoolerDirMountPath,
-		"--socket-file=" + PoolerDirMountPath + "/pg_sockets/.s.PGSQL.5432", // Unix socket uses trust auth (no password)
+		"--socket-file=" + PoolerDirMountPath + "/pg_sockets/.s.PGSQL.5432", // Unix socket path; auth is controlled by pg_hba.
 		"--service-map=grpc-pooler",                                         // Only enable grpc-pooler service (disables auto-restore service)
 		"--topo-global-server-addresses=" + shard.Spec.GlobalTopoServer.Address,
 		"--topo-global-root=" + shard.Spec.GlobalTopoServer.RootPath,
