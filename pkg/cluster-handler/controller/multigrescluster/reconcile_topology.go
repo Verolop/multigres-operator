@@ -103,7 +103,13 @@ func (r *MultigresClusterReconciler) reconcileTopology(
 	// Register all cells.
 	for _, cellCfg := range cluster.Spec.Cells {
 		if err := topo.RegisterCellFromSpec(
-			topoCtx, store, r.Recorder, cluster, cellCfg, localTopoSpecs[cellCfg.Name], globalTopoRef,
+			topoCtx,
+			store,
+			r.Recorder,
+			cluster,
+			cellCfg,
+			localTopoSpecs[cellCfg.Name],
+			globalTopoRef,
 			topo.ManagedLocalTopoServerAddress(
 				name.JoinWithConstraints(
 					name.DefaultConstraints, cluster.Name, string(cellCfg.Name)),

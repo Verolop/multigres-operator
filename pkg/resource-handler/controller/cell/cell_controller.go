@@ -317,8 +317,13 @@ func (r *CellReconciler) localTopoServerReady(
 		return false, fmt.Errorf("failed to get local TopoServer: %w", err)
 	}
 	if !isControlledByCell(toposerver, cell) {
-		return false, fmt.Errorf("refusing to use local TopoServer %s/%s not controlled by Cell %s/%s",
-			toposerver.Namespace, toposerver.Name, cell.Namespace, cell.Name)
+		return false, fmt.Errorf(
+			"refusing to use local TopoServer %s/%s not controlled by Cell %s/%s",
+			toposerver.Namespace,
+			toposerver.Name,
+			cell.Namespace,
+			cell.Name,
+		)
 	}
 
 	return toposerver.Status.ObservedGeneration == toposerver.Generation &&
@@ -425,8 +430,13 @@ func (r *CellReconciler) deleteLocalTopoServerIfExists(
 		return false, fmt.Errorf("failed to get local TopoServer: %w", err)
 	}
 	if !isControlledByCell(toposerver, cell) {
-		return false, fmt.Errorf("refusing to delete local TopoServer %s/%s not controlled by Cell %s/%s",
-			toposerver.Namespace, toposerver.Name, cell.Namespace, cell.Name)
+		return false, fmt.Errorf(
+			"refusing to delete local TopoServer %s/%s not controlled by Cell %s/%s",
+			toposerver.Namespace,
+			toposerver.Name,
+			cell.Namespace,
+			cell.Name,
+		)
 	}
 	if !toposerver.DeletionTimestamp.IsZero() {
 		return true, nil

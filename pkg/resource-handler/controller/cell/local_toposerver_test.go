@@ -398,7 +398,9 @@ func TestCellReconcilerPendingDeletionWaitsForManagedLocalTopoServer(t *testing.
 	}
 }
 
-func TestCellReconcilerPendingDeletionDeletesObservedLocalTopoServerWhenSpecNoLongerManaged(t *testing.T) {
+func TestCellReconcilerPendingDeletionDeletesObservedLocalTopoServerWhenSpecNoLongerManaged(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	scheme := cellTestScheme(t)
