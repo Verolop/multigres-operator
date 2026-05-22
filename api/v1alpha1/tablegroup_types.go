@@ -100,8 +100,7 @@ type TableGroupSpec struct {
 	PostgresSuperuser string `json:"postgresSuperuser,omitempty"`
 
 	// PostgresPasswordSecretRef is inherited from the MultigresCluster.
-	// +optional
-	PostgresPasswordSecretRef *PostgresPasswordSecretRef `json:"postgresPasswordSecretRef,omitempty"`
+	PostgresPasswordSecretRef PostgresPasswordSecretRef `json:"postgresPasswordSecretRef"`
 }
 
 // ShardResolvedSpec represents the fully calculated spec for a shard,

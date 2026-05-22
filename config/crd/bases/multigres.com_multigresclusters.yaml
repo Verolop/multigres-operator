@@ -10522,14 +10522,10 @@ spec:
               postgresPasswordSecretRef:
                 description: |-
                   PostgresPasswordSecretRef references a Secret containing the final
-                  Postgres superuser password. When unset, the operator creates a per-shard
-                  Secret with the legacy default password.
+                  Postgres superuser password.
                 properties:
                   key:
-                    default: password
-                    description: |-
-                      Key is the Secret data key containing the password.
-                      Defaults to "password".
+                    description: Key is the Secret data key containing the password.
                     maxLength: 253
                     minLength: 1
                     pattern: ^[-._a-zA-Z0-9]+$
@@ -10541,6 +10537,7 @@ spec:
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                 required:
+                - key
                 - name
                 type: object
               postgresSuperuser:
@@ -10613,6 +10610,8 @@ spec:
                       Default: true (nil or empty means enabled).
                     type: boolean
                 type: object
+            required:
+            - postgresPasswordSecretRef
             type: object
           status:
             description: MultigresClusterStatus defines the observed state.

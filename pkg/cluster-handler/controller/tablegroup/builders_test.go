@@ -108,7 +108,7 @@ func TestBuildShard(t *testing.T) {
 
 	t.Run("PostgresPasswordSecretRef propagates from TableGroup to Shard", func(t *testing.T) {
 		tgWithRef := tg.DeepCopy()
-		tgWithRef.Spec.PostgresPasswordSecretRef = &multigresv1alpha1.PostgresPasswordSecretRef{
+		tgWithRef.Spec.PostgresPasswordSecretRef = multigresv1alpha1.PostgresPasswordSecretRef{
 			Name: "multigres-admin-password",
 			Key:  "current",
 		}
@@ -116,9 +116,6 @@ func TestBuildShard(t *testing.T) {
 		got, err := BuildShard(tgWithRef, shardSpec, scheme)
 		if err != nil {
 			t.Fatalf("BuildShard() error = %v", err)
-		}
-		if got.Spec.PostgresPasswordSecretRef == nil {
-			t.Fatal("Spec.PostgresPasswordSecretRef = nil, want propagated ref")
 		}
 		if got.Spec.PostgresPasswordSecretRef.Name != "multigres-admin-password" {
 			t.Errorf(

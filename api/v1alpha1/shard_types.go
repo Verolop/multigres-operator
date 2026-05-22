@@ -194,8 +194,7 @@ type ShardSpec struct {
 
 	// PostgresPasswordSecretRef is the resolved Postgres superuser password
 	// Secret.
-	// +optional
-	PostgresPasswordSecretRef *PostgresPasswordSecretRef `json:"postgresPasswordSecretRef,omitempty"`
+	PostgresPasswordSecretRef PostgresPasswordSecretRef `json:"postgresPasswordSecretRef"`
 
 	// CellTopologyLabels maps cell names to their topology nodeSelector labels.
 	// Each entry is a map like {"topology.kubernetes.io/zone": "us-east-1a"}.
