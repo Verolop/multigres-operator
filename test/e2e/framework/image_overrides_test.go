@@ -43,6 +43,22 @@ func TestRuntimeImagesUsesOverridesAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestKindLoadableImagesSkipsDigestReferences(t *testing.T) {
+	images := []string{
+		"ghcr.io/multigres/multigres-operator:test",
+		"ghcr.io/multigres/multigres@sha256:6193a83dc4db60c61965a0f1bfac071987569eb8775d9040c0ef5d0a867213b0",
+		"gcr.io/etcd-development/etcd:v3.6.7",
+	}
+	want := []string{
+		"ghcr.io/multigres/multigres-operator:test",
+		"gcr.io/etcd-development/etcd:v3.6.7",
+	}
+
+	if got := kindLoadableImages(images); !slices.Equal(got, want) {
+		t.Fatalf("kindLoadableImages() = %v, want %v", got, want)
+	}
+}
+
 func count(values []string, target string) int {
 	total := 0
 	for _, value := range values {
