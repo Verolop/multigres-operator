@@ -54,8 +54,7 @@ type MultigresClusterSpec struct {
 	Images ClusterImages `json:"images,omitempty"`
 
 	// ImageUpdatePolicy controls when the cluster adopts a changed
-	// operator-default image set. Only consulted when the operator runs the
-	// lazy update strategy; explicit spec.images values are unaffected.
+	// operator-default image set. Explicit spec.images values are unaffected.
 	// +optional
 	ImageUpdatePolicy *ImageUpdatePolicy `json:"imageUpdatePolicy,omitempty"`
 
@@ -201,6 +200,15 @@ type ClusterImages struct {
 // ImageUpdatePolicy controls when a cluster adopts a changed operator-default
 // image set.
 type ImageUpdatePolicy struct {
+	// Strategy overrides the operator's --image-update-strategy for this
+	// cluster: "immediate" adopts a changed default image set on the next
+	// reconcile; "lazy" holds the current set until acknowledgedRevision
+	// names the new revision. Empty inherits the operator's flag. This lets
+	// individual clusters be frozen or advanced independently of the fleet.
+	// +optional
+	// +kubebuilder:validation:Enum=immediate;lazy
+	Strategy string `json:"strategy,omitempty"`
+
 	// AcknowledgedRevision authorizes the cluster to adopt the default image
 	// set with this revision. Under the lazy update strategy, a cluster keeps
 	// the set it is running until this field names the revision published in
@@ -233,8 +241,9 @@ type ComponentImages struct {
 // and whether a newer default set is available. Components explicitly pinned
 // in spec.images are unaffected by this state.
 type ImagesStatus struct {
-	// UpdateStrategy is the strategy the operator is running with
-	// (--image-update-strategy). It determines whether
+	// UpdateStrategy is the strategy in effect for this cluster:
+	// spec.imageUpdatePolicy.strategy when set, otherwise the operator's
+	// --image-update-strategy flag. It determines whether
 	// spec.imageUpdatePolicy.acknowledgedRevision has any effect: "lazy"
 	// consults it, "immediate" ignores it.
 	// +optional

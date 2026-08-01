@@ -8316,8 +8316,7 @@ spec:
               imageUpdatePolicy:
                 description: |-
                   ImageUpdatePolicy controls when the cluster adopts a changed
-                  operator-default image set. Only consulted when the operator runs the
-                  lazy update strategy; explicit spec.images values are unaffected.
+                  operator-default image set. Explicit spec.images values are unaffected.
                 properties:
                   acknowledgedRevision:
                     description: |-
@@ -8328,6 +8327,17 @@ spec:
                       no effect and is reported through the ImageRolloutPending condition.
                     maxLength: 64
                     pattern: ^[0-9a-f]*$
+                    type: string
+                  strategy:
+                    description: |-
+                      Strategy overrides the operator's --image-update-strategy for this
+                      cluster: "immediate" adopts a changed default image set on the next
+                      reconcile; "lazy" holds the current set until acknowledgedRevision
+                      names the new revision. Empty inherits the operator's flag. This lets
+                      individual clusters be frozen or advanced independently of the fleet.
+                    enum:
+                    - immediate
+                    - lazy
                     type: string
                 type: object
               images:
@@ -10895,8 +10905,9 @@ spec:
                     type: string
                   updateStrategy:
                     description: |-
-                      UpdateStrategy is the strategy the operator is running with
-                      (--image-update-strategy). It determines whether
+                      UpdateStrategy is the strategy in effect for this cluster:
+                      spec.imageUpdatePolicy.strategy when set, otherwise the operator's
+                      --image-update-strategy flag. It determines whether
                       spec.imageUpdatePolicy.acknowledgedRevision has any effect: "lazy"
                       consults it, "immediate" ignores it.
                     type: string
