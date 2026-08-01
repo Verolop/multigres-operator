@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/images"
 	"github.com/multigres/multigres-operator/pkg/monitoring"
 	"github.com/multigres/multigres-operator/pkg/resolver"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
@@ -35,6 +36,11 @@ type MultigresClusterReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// Images is the operator's default component image set and update
+	// strategy. The zero value falls back to the compiled-in defaults with
+	// the immediate strategy.
+	Images images.Config
 
 	// CreateTopoStore overrides the default topology store factory for testing.
 	CreateTopoStore func(multigresv1alpha1.GlobalTopoServerRef) (topoclient.Store, error)
@@ -107,7 +113,7 @@ func (r *MultigresClusterReconciler) Reconcile(
 
 	res := resolver.NewResolver(r.Client, cluster.Namespace)
 
-	// Apply defaults (in-memory) to ensure we have images/configs/system-catalog even if webhook didn't run.
+	// Apply defaults (in-memory) to ensure we have configs/system-catalog even if webhook didn't run.
 	{
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "MultigresCluster.PopulateDefaults")
 		decisions, err := res.PopulateClusterDefaults(ctx, cluster)
@@ -166,6 +172,18 @@ func (r *MultigresClusterReconciler) Reconcile(
 
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, cluster)
+	}
+
+	if err := r.resolveImages(ctx, cluster); err != nil {
+		l.Error(err, "Failed to resolve component images")
+		r.Recorder.Eventf(
+			cluster,
+			"Warning",
+			"FailedApply",
+			"Failed to resolve component images: %v",
+			err,
+		)
+		return ctrl.Result{}, err
 	}
 
 	{
