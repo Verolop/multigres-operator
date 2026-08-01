@@ -53,6 +53,12 @@ type MultigresClusterSpec struct {
 	// +optional
 	Images ClusterImages `json:"images,omitempty"`
 
+	// ImageUpdatePolicy controls when the cluster adopts a changed
+	// operator-default image set. Only consulted when the operator runs the
+	// lazy update strategy; explicit spec.images values are unaffected.
+	// +optional
+	ImageUpdatePolicy *ImageUpdatePolicy `json:"imageUpdatePolicy,omitempty"`
+
 	// LogLevels configures the --log-level flag for each multigres data-plane component.
 	// All fields default to "info" if not specified.
 	// +optional
@@ -190,6 +196,65 @@ type ClusterImages struct {
 	MultiadminWeb ImageRef `json:"multiadminWeb,omitempty"`
 	// +optional
 	Postgres ImageRef `json:"postgres,omitempty"`
+}
+
+// ImageUpdatePolicy controls when a cluster adopts a changed operator-default
+// image set.
+type ImageUpdatePolicy struct {
+	// AcknowledgedRevision authorizes the cluster to adopt the default image
+	// set with this revision. Under the lazy update strategy, a cluster keeps
+	// the set it is running until this field names the revision published in
+	// status.images.availableRevision. A value matching no known revision has
+	// no effect and is reported through the ImageRolloutPending condition.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern="^[0-9a-f]*$"
+	AcknowledgedRevision string `json:"acknowledgedRevision,omitempty"`
+}
+
+// ComponentImages is a concrete image for every Multigres component. It
+// describes a fully resolved image set.
+type ComponentImages struct {
+	// +optional
+	Multigateway ImageRef `json:"multigateway,omitempty"`
+	// +optional
+	Multiorch ImageRef `json:"multiorch,omitempty"`
+	// +optional
+	Multipooler ImageRef `json:"multipooler,omitempty"`
+	// +optional
+	Multiadmin ImageRef `json:"multiadmin,omitempty"`
+	// +optional
+	MultiadminWeb ImageRef `json:"multiadminWeb,omitempty"`
+	// +optional
+	Postgres ImageRef `json:"postgres,omitempty"`
+}
+
+// ImagesStatus reports which operator-default images the cluster is running
+// and whether a newer default set is available. Components explicitly pinned
+// in spec.images are unaffected by this state.
+type ImagesStatus struct {
+	// UpdateStrategy is the strategy the operator is running with
+	// (--image-update-strategy). It determines whether
+	// spec.imageUpdatePolicy.acknowledgedRevision has any effect: "lazy"
+	// consults it, "immediate" ignores it.
+	// +optional
+	UpdateStrategy string `json:"updateStrategy,omitempty"`
+
+	// Applied is the operator-default image set currently used for components
+	// that are not explicitly set in spec.images.
+	// +optional
+	Applied ComponentImages `json:"applied"`
+
+	// AppliedRevision identifies the applied default image set.
+	// +optional
+	AppliedRevision string `json:"appliedRevision,omitempty"`
+
+	// AvailableRevision identifies the operator's current default image set.
+	// When it differs from appliedRevision, a new set is available but has not
+	// been adopted yet; with the lazy update strategy, adoption waits for
+	// spec.imageUpdatePolicy.acknowledgedRevision to be set to this value.
+	// +optional
+	AvailableRevision string `json:"availableRevision,omitempty"`
 }
 
 // ============================================================================
@@ -519,6 +584,23 @@ const (
 
 	// ReasonEndpointReady indicates the external endpoint is serving traffic.
 	ReasonEndpointReady = "EndpointReady"
+
+	// ConditionImageRolloutPending indicates whether a newer operator-default
+	// image set is available that this cluster has not adopted yet.
+	ConditionImageRolloutPending = "ImageRolloutPending"
+
+	// ReasonAwaitingAcknowledgement indicates a new default image set is
+	// available and the cluster is holding its current set until
+	// spec.imageUpdatePolicy.acknowledgedRevision names the new revision.
+	ReasonAwaitingAcknowledgement = "AwaitingAcknowledgement"
+
+	// ReasonRevisionMismatch indicates the acknowledged revision does not
+	// match the available revision, so it has no effect.
+	ReasonRevisionMismatch = "RevisionMismatch"
+
+	// ReasonImagesUpToDate indicates the cluster runs the operator's current
+	// default image set.
+	ReasonImagesUpToDate = "UpToDate"
 )
 
 // ============================================================================
@@ -615,6 +697,10 @@ type MultigresClusterStatus struct {
 	// successful reconciliation. Used for targeted template-change enqueuing.
 	// +optional
 	ResolvedTemplates *ResolvedTemplates `json:"resolvedTemplates,omitempty"`
+
+	// Images reports the operator-default image rollout state.
+	// +optional
+	Images *ImagesStatus `json:"images,omitempty"`
 }
 
 // ResolvedTemplates tracks the template names resolved during reconciliation.
@@ -656,6 +742,7 @@ type DatabaseStatusSummary struct {
 // MultigresCluster represents a distributed database cluster managed by the operator.
 // +kubebuilder:resource:shortName=mgc
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Images",type="string",JSONPath=".status.images.appliedRevision",priority=1
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 25",message="MultigresCluster name must be at most 25 characters"
 type MultigresCluster struct {
 	metav1.TypeMeta   `json:",inline"`

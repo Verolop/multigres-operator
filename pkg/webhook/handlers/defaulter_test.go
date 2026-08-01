@@ -67,13 +67,9 @@ func TestMultigresClusterDefaulter_Handle(t *testing.T) {
 			validate: func(t testing.TB, cluster *multigresv1alpha1.MultigresCluster) {
 				t.Helper()
 				want := &multigresv1alpha1.MultigresClusterSpec{
+					// Component images are never materialised: they resolve
+					// at reconcile time from operator configuration.
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        resolver.DefaultPostgresImage,
-						Multiadmin:      resolver.DefaultMultiadminImage,
-						Multiorch:       resolver.DefaultMultiorchImage,
-						Multipooler:     resolver.DefaultMultipoolerImage,
-						Multigateway:    resolver.DefaultMultigatewayImage,
-						MultiadminWeb:   resolver.DefaultMultiadminWebImage,
 						ImagePullPolicy: corev1.PullIfNotPresent,
 					},
 					LogLevels: multigresv1alpha1.ComponentLogLevels{
@@ -416,12 +412,6 @@ func TestMultigresClusterDefaulter_Handle(t *testing.T) {
 							},
 						},
 						Images: multigresv1alpha1.ClusterImages{
-							Postgres:        resolver.DefaultPostgresImage,
-							Multiadmin:      resolver.DefaultMultiadminImage,
-							MultiadminWeb:   resolver.DefaultMultiadminWebImage,
-							Multiorch:       resolver.DefaultMultiorchImage,
-							Multipooler:     resolver.DefaultMultipoolerImage,
-							Multigateway:    resolver.DefaultMultigatewayImage,
 							ImagePullPolicy: resolver.DefaultImagePullPolicy,
 						},
 						LogLevels: multigresv1alpha1.ComponentLogLevels{

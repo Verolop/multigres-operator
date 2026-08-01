@@ -26,6 +26,10 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.images.appliedRevision
+      name: Images
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -8497,6 +8501,23 @@ spec:
                 - message: must specify exactly one of 'etcd', 'external', or 'templateRef'
                   rule: '[has(self.etcd), has(self.external), has(self.templateRef)].filter(x,
                     x).size() == 1'
+              imageUpdatePolicy:
+                description: |-
+                  ImageUpdatePolicy controls when the cluster adopts a changed
+                  operator-default image set. Only consulted when the operator runs the
+                  lazy update strategy; explicit spec.images values are unaffected.
+                properties:
+                  acknowledgedRevision:
+                    description: |-
+                      AcknowledgedRevision authorizes the cluster to adopt the default image
+                      set with this revision. Under the lazy update strategy, a cluster keeps
+                      the set it is running until this field names the revision published in
+                      status.images.availableRevision. A value matching no known revision has
+                      no effect and is reported through the ImageRolloutPending condition.
+                    maxLength: 64
+                    pattern: ^[0-9a-f]*$
+                    type: string
+                type: object
               images:
                 description: Images defines the container images for all components
                   in the cluster.
@@ -11009,6 +11030,64 @@ spec:
                     type: string
                 required:
                 - externalEndpoint
+                type: object
+              images:
+                description: Images reports the operator-default image rollout state.
+                properties:
+                  applied:
+                    description: |-
+                      Applied is the operator-default image set currently used for components
+                      that are not explicitly set in spec.images.
+                    properties:
+                      multiadmin:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiadminWeb:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multigateway:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiorch:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multipooler:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      postgres:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                    type: object
+                  appliedRevision:
+                    description: AppliedRevision identifies the applied default image
+                      set.
+                    type: string
+                  availableRevision:
+                    description: |-
+                      AvailableRevision identifies the operator's current default image set.
+                      When it differs from appliedRevision, a new set is available but has not
+                      been adopted yet; with the lazy update strategy, adoption waits for
+                      spec.imageUpdatePolicy.acknowledgedRevision to be set to this value.
+                    type: string
+                  updateStrategy:
+                    description: |-
+                      UpdateStrategy is the strategy the operator is running with
+                      (--image-update-strategy). It determines whether
+                      spec.imageUpdatePolicy.acknowledgedRevision has any effect: "lazy"
+                      consults it, "immediate" ignores it.
+                    type: string
                 type: object
               message:
                 description: Message provides details about the current phase (e.g.
