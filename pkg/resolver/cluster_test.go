@@ -44,12 +44,6 @@ func TestResolver_PopulateClusterDefaults(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        DefaultPostgresImage,
-						Multiadmin:      DefaultMultiadminImage,
-						MultiadminWeb:   DefaultMultiadminWebImage,
-						Multiorch:       DefaultMultiorchImage,
-						Multipooler:     DefaultMultipoolerImage,
-						Multigateway:    DefaultMultigatewayImage,
 						ImagePullPolicy: DefaultImagePullPolicy,
 					},
 					TemplateDefaults: multigresv1alpha1.TemplateDefaults{
@@ -110,12 +104,6 @@ func TestResolver_PopulateClusterDefaults(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        DefaultPostgresImage,
-						Multiadmin:      DefaultMultiadminImage,
-						MultiadminWeb:   DefaultMultiadminWebImage,
-						Multiorch:       DefaultMultiorchImage,
-						Multipooler:     DefaultMultipoolerImage,
-						Multigateway:    DefaultMultigatewayImage,
 						ImagePullPolicy: DefaultImagePullPolicy,
 					},
 					TemplateDefaults: multigresv1alpha1.TemplateDefaults{
@@ -184,12 +172,6 @@ func TestResolver_PopulateClusterDefaults(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        DefaultPostgresImage,
-						Multiadmin:      DefaultMultiadminImage,
-						MultiadminWeb:   DefaultMultiadminWebImage,
-						Multiorch:       DefaultMultiorchImage,
-						Multipooler:     DefaultMultipoolerImage,
-						Multigateway:    DefaultMultigatewayImage,
 						ImagePullPolicy: DefaultImagePullPolicy,
 					},
 					TemplateDefaults: multigresv1alpha1.TemplateDefaults{
@@ -271,12 +253,6 @@ func TestResolver_PopulateClusterDefaults(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        DefaultPostgresImage,
-						Multiadmin:      DefaultMultiadminImage,
-						MultiadminWeb:   DefaultMultiadminWebImage,
-						Multiorch:       DefaultMultiorchImage,
-						Multipooler:     DefaultMultipoolerImage,
-						Multigateway:    DefaultMultigatewayImage,
 						ImagePullPolicy: DefaultImagePullPolicy,
 					},
 					TemplateDefaults: multigresv1alpha1.TemplateDefaults{
@@ -353,12 +329,6 @@ func TestResolver_PopulateClusterDefaults(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					Images: multigresv1alpha1.ClusterImages{
-						Postgres:        DefaultPostgresImage,
-						Multiadmin:      DefaultMultiadminImage,
-						MultiadminWeb:   DefaultMultiadminWebImage,
-						Multiorch:       DefaultMultiorchImage,
-						Multipooler:     DefaultMultipoolerImage,
-						Multigateway:    DefaultMultigatewayImage,
 						ImagePullPolicy: DefaultImagePullPolicy,
 					},
 					TemplateDefaults: multigresv1alpha1.TemplateDefaults{

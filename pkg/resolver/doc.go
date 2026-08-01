@@ -23,9 +23,11 @@
 //
 //  1. Mutation (Webhook):
 //     The 'PopulateClusterDefaults' method is safe to call during admission. It applies
-//     static defaults (images) and "Smart Defaults" (injecting mandatory system
-//     databases, table groups, and shards) to the API object itself. This solves the
-//     "Invisible Defaults" problem without making external API calls.
+//     static defaults (pull policy, log levels) and "Smart Defaults" (injecting mandatory
+//     system databases, table groups, and shards) to the API object itself. This solves
+//     the "Invisible Defaults" problem without making external API calls. Component
+//     images are deliberately excluded: they are operator configuration resolved at
+//     reconcile time (see pkg/images), never persisted into the spec.
 //
 //  2. Reconciliation (Controller):
 //     The 'Resolve...' methods (e.g., ResolveGlobalTopo) are used during reconciliation.

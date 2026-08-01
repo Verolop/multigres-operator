@@ -103,6 +103,14 @@ const (
 	// a different hash, which changes the spec-hash and triggers a rolling update.
 	AnnotationPostgresConfigHash = "multigres.com/postgres-config-hash"
 
+	// AnnotationAppliedImages is the operator-written durable record of the
+	// default image set the operator has committed to resolving for the
+	// cluster (JSON-encoded ComponentImages); children converge to it. It
+	// backs the lazy update strategy: status can be lost on backup/restore
+	// or kubectl replace, and losing the applied record must not roll the
+	// cluster onto new defaults. Annotations survive where status does not.
+	AnnotationAppliedImages = "multigres.com/applied-images"
+
 	// AnnotationDrainState is used to coordinate graceful scale down between
 	// the resource-handler (Kubernetes) and data-handler (etcd).
 	AnnotationDrainState = "drain.multigres.com/state"
