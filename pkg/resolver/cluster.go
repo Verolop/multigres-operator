@@ -17,25 +17,12 @@ func (r *Resolver) PopulateClusterDefaults(
 	cluster *multigresv1alpha1.MultigresCluster,
 ) ([]string, error) {
 	var decisions []string
-	// 1. Default Images
-	if cluster.Spec.Images.Postgres == "" {
-		cluster.Spec.Images.Postgres = multigresv1alpha1.DefaultPostgresImage
-	}
-	if cluster.Spec.Images.Multiadmin == "" {
-		cluster.Spec.Images.Multiadmin = multigresv1alpha1.DefaultMultiadminImage
-	}
-	if cluster.Spec.Images.MultiadminWeb == "" {
-		cluster.Spec.Images.MultiadminWeb = multigresv1alpha1.DefaultMultiadminWebImage
-	}
-	if cluster.Spec.Images.Multiorch == "" {
-		cluster.Spec.Images.Multiorch = multigresv1alpha1.DefaultMultiorchImage
-	}
-	if cluster.Spec.Images.Multipooler == "" {
-		cluster.Spec.Images.Multipooler = multigresv1alpha1.DefaultMultipoolerImage
-	}
-	if cluster.Spec.Images.Multigateway == "" {
-		cluster.Spec.Images.Multigateway = multigresv1alpha1.DefaultMultigatewayImage
-	}
+	// Component images are deliberately not defaulted here. They are operator
+	// configuration that changes every release, so persisting them would
+	// freeze each cluster on the versions it was admitted with. The cluster
+	// reconciler resolves unset images in-memory from the operator's image
+	// config (pkg/images) at reconcile time; only the stable pull policy is
+	// materialised.
 	if cluster.Spec.Images.ImagePullPolicy == "" {
 		cluster.Spec.Images.ImagePullPolicy = DefaultImagePullPolicy
 	}
