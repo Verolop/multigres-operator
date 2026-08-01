@@ -25,6 +25,27 @@ You can customize the operator's behavior by passing flags to the binary (or edi
 | `--metrics-secure` | `true` | Serve metrics over HTTPS with authentication and authorization. |
 | `--enable-http2` | `false` | Enable HTTP/2 for metrics and webhook servers. |
 | `--leader-elect` | `false` | Enable leader election (recommended for HA deployments). |
+| `--image-update-strategy` | `immediate` | Default for when clusters adopt a changed default image set: `immediate` rolls a cluster as soon as operator configuration changes; `lazy` holds it on its current set until `spec.imageUpdatePolicy.acknowledgedRevision` names the new set's revision. Individual clusters can override this via `spec.imageUpdatePolicy.strategy`. |
+
+## Component Images
+
+Component images are operator configuration, resolved at reconcile time: the
+operator uses its compiled-in defaults for any component not explicitly set in
+`spec.images`, and each default can be overridden on the operator Deployment.
+Explicit `spec.images` values always win. The resolved default set and its
+revision are logged at startup and reported per cluster in `status.images`.
+
+| Variable | Overrides the default image for |
+| :--- | :--- |
+| `MULTIGRES_IMAGE_POSTGRES` | Postgres (pgctld) |
+| `MULTIGRES_IMAGE_MULTIADMIN` | Multiadmin |
+| `MULTIGRES_IMAGE_MULTIADMIN_WEB` | MultiadminWeb |
+| `MULTIGRES_IMAGE_MULTIORCH` | Multiorch |
+| `MULTIGRES_IMAGE_MULTIPOOLER` | Multipooler |
+| `MULTIGRES_IMAGE_MULTIGATEWAY` | Multigateway |
+
+See [gitops-and-webhook-defaults.md](gitops-and-webhook-defaults.md) for how
+image resolution and the lazy update strategy behave per cluster.
 
 ## Logging
 

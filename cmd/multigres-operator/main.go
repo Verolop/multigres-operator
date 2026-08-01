@@ -54,6 +54,7 @@ import (
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	multigresclustercontroller "github.com/multigres/multigres-operator/pkg/cluster-handler/controller/multigrescluster"
 	tablegroupcontroller "github.com/multigres/multigres-operator/pkg/cluster-handler/controller/tablegroup"
+	"github.com/multigres/multigres-operator/pkg/images"
 	"github.com/multigres/multigres-operator/pkg/resolver"
 	cellcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/cell"
 	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
@@ -147,6 +148,17 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers",
 	)
 
+	var imageUpdateStrategy string
+	flag.StringVar(
+		&imageUpdateStrategy,
+		"image-update-strategy",
+		string(images.UpdateImmediate),
+		"When clusters adopt a changed default image set: 'immediate' rolls all "+
+			"clusters as soon as operator configuration changes; 'lazy' holds each "+
+			"cluster on its current set until spec.imageUpdatePolicy."+
+			"acknowledgedRevision names the new set's revision.",
+	)
+
 	// Webhook Flag Configuration
 	flag.IntVar(&webhookPort, "webhook-port", 9443, " The port that the webhook server serves at.")
 	flag.BoolVar(&webhookEnabled, "webhook-enable", true, "Enable the admission webhook server")
@@ -180,6 +192,32 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if imageUpdateStrategy != string(images.UpdateImmediate) &&
+		imageUpdateStrategy != string(images.UpdateLazy) {
+		setupLog.Error(
+			errors.New("--image-update-strategy must be 'immediate' or 'lazy'"),
+			"invalid configuration", "value", imageUpdateStrategy,
+		)
+		os.Exit(1)
+	}
+
+	defaultImages, imageOverrides := images.DefaultsFromEnv()
+	imagesConfig := images.Config{
+		Defaults: defaultImages,
+		Strategy: images.UpdateStrategy(imageUpdateStrategy),
+	}
+	setupLog.Info("resolved default component images",
+		"revision", images.Revision(defaultImages),
+		"updateStrategy", imageUpdateStrategy,
+		"postgres", defaultImages.Postgres,
+		"multiadmin", defaultImages.Multiadmin,
+		"multiadminWeb", defaultImages.MultiadminWeb,
+		"multiorch", defaultImages.Multiorch,
+		"multipooler", defaultImages.Multipooler,
+		"multigateway", defaultImages.Multigateway,
+		"envOverrides", imageOverrides,
+	)
 
 	// Initialize distributed tracing (noop if OTEL_EXPORTER_OTLP_ENDPOINT is unset).
 	shutdownTracing, err := monitoring.InitTracing(
@@ -415,6 +453,7 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("multigrescluster-controller"),
+		Images:   imagesConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MultigresCluster")
 		os.Exit(1)

@@ -4,9 +4,11 @@ This document explains how the Multigres Operator uses its **Mutating Webhook** 
 
 ## Why Materialise Defaults?
 
-Many Kubernetes operators apply defaults **in-memory** during reconciliation. This approach has a major user-facing problem: running `kubectl get multigrescluster -o yaml` will show a sparse spec that doesn't reflect what the operator is actually enforcing. Image versions, replica counts, resource limits, backup paths — all hidden.
+Many Kubernetes operators apply defaults **in-memory** during reconciliation. This approach has a major user-facing problem: running `kubectl get multigrescluster -o yaml` will show a sparse spec that doesn't reflect what the operator is actually enforcing. Replica counts, resource limits, backup paths — all hidden.
 
 The Multigres Operator solves this with a **Mutating Webhook** that writes defaults directly into the stored spec in etcd. When you run `kubectl get multigrescluster -o yaml`, you see *exactly* what the operator is using — no guessing, no hidden state.
+
+Materialisation is only used for defaults that are **stable over time**. Values that change with operator releases — component images above all — are intentionally never persisted; see [Intentionally Dynamic Fields](#intentionally-dynamic-fields).
 
 ### What Gets Materialised
 
@@ -14,7 +16,6 @@ On every `CREATE` and `UPDATE` of a `MultigresCluster`, the webhook materialises
 
 | Field | Default Value |
 | :--- | :--- |
-| `spec.images.*` (all 7 component images) | Compiled-in image tags (SHA-pinned) |
 | `spec.images.imagePullPolicy` | `IfNotPresent` |
 | `spec.topologyPruning.enabled` | `true` |
 | `spec.durabilityPolicy` | `AT_LEAST_2` |
@@ -43,7 +44,57 @@ The webhook is the **primary** path, but the operator does not depend on it. The
 
 Some fields are **intentionally NOT materialised** into the parent `MultigresCluster` spec because they are resolved dynamically at reconcile time.
 
-### 1. Shard Cell Assignments (`multiOrch.cells`, `pool.cells`)
+### 1. Component Images (`spec.images.*`)
+
+Component images change with every operator release, so they are the opposite of a stable default. If the webhook wrote them into the spec, every cluster would stay frozen on the images it was admitted with, and a fleet-wide upgrade would mean patching every resource by hand. Persisted image values are also indistinguishable from deliberate user pins, so nothing could ever safely update them. This matches what mature operators do: CloudNativePG, Zalando's postgres-operator, and the Prometheus Operator all resolve operand images at reconcile time from operator-level configuration.
+
+**How resolution works.** For each component, the first match wins:
+
+1. An explicit `spec.images.<component>` value — a user pin, never touched by the operator.
+2. The operator's deployment-level override (`MULTIGRES_IMAGE_*` environment variables, see [configuration.md](configuration.md#component-images)).
+3. The compiled-in default for the running operator build.
+
+Nothing is written back into the spec. The resolved values are visible on the child CRs (`kubectl get shard/cell/tablegroup -o yaml`) and in `status.images` on the `MultigresCluster`:
+
+```yaml
+status:
+  images:
+    applied:                       # default set currently in use
+      postgres: ghcr.io/multigres/pgctld:sha-54b4c18
+      ...
+    appliedRevision: 1a2b3c4d5e6f  # identifies the applied set
+    availableRevision: 1a2b3c4d5e6f # the operator's current default set
+  conditions:
+    - type: ImageRolloutPending    # True when a newer set awaits adoption
+      status: "False"
+      reason: UpToDate
+```
+
+The applied set is also recorded in the operator-owned `multigres.com/applied-images` annotation. That copy is the durable one: status can be lost on backup/restore or `kubectl replace`, and losing it must not roll the cluster onto new defaults. Do not edit or strip this annotation.
+
+**Update strategies.** By default (`--image-update-strategy=immediate`), changing the operator's image configuration — a new operator build or a changed override — rolls every cluster on its next reconcile. With `--image-update-strategy=lazy`, each cluster keeps the default set it is already running: `status.images.availableRevision` advances to announce the new set, but the cluster adopts it only when the new revision is acknowledged in its spec:
+
+```yaml
+spec:
+  imageUpdatePolicy:
+    acknowledgedRevision: "<availableRevision>"
+```
+
+This lets a control plane pace a fleet upgrade by moving one field per cluster instead of six image values, and is the same shape as Zalando's lazy upgrade flag and CloudNativePG's supervised rollouts. Newly created clusters always start on the current default set. Explicit `spec.images` pins are unaffected by either strategy. An acknowledged revision that does not match the available one has no effect; the `ImageRolloutPending` condition reports `RevisionMismatch` and a warning event is emitted.
+
+The flag sets the fleet-wide default; `spec.imageUpdatePolicy.strategy` overrides it per cluster. That allows freezing a single cluster (`strategy: lazy`) while the rest follow an immediate operator, or letting one cluster track operator defaults (`strategy: immediate`) under a lazy fleet. `status.images.updateStrategy` reports which strategy is in effect for the cluster.
+
+**Handing a cluster back to operator-managed images.** Anything set in `spec.images` is a pin, and a pinned component never follows operator defaults. This also covers clusters created by older operator versions, which wrote the compiled-in defaults into `spec.images` at admission: those clusters keep running exactly what they are running now, as pins. To let the operator manage a component again, clear its field:
+
+```bash
+kubectl patch multigrescluster <name> --type=merge -p '{"spec":{"images":{
+  "postgres":null,"multiadmin":null,"multiadminWeb":null,
+  "multiorch":null,"multipooler":null,"multigateway":null}}}'
+```
+
+Only clear values you did not set yourself. If you pin images deliberately, pin by digest rather than tag — a digest states intent unambiguously.
+
+### 2. Shard Cell Assignments (`multiOrch.cells`, `pool.cells`)
 
 ### Why They Stay Empty
 
@@ -123,7 +174,7 @@ spec:
 | `Shard` child CR | `status.cells` | Currently deployed cells |
 | `TableGroup` child CR | `spec.shards[].multiorch.cells` | Resolved cell list |
 
-### 2. Observability Configuration (`spec.observability`)
+### 3. Observability Configuration (`spec.observability`)
 
 The `ObservabilityConfig` in the `MultigresCluster` spec controls OpenTelemetry settings (OTLP endpoint, exporters, sampling) for data-plane components. These fields have a **dual-source fallback**: if a field is empty in the CRD, the operator falls back to its own `OTEL_*` environment variables at reconcile time.
 
@@ -187,7 +238,6 @@ spec:
     - group: multigres.com
       kind: MultigresCluster
       jsonPointers:
-        - /spec/images
         - /spec/topologyPruning
         - /spec/durabilityPolicy
         - /spec/pvcDeletionPolicy
