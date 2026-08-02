@@ -26,7 +26,8 @@ func TestReconcile_Databases(t *testing.T) {
 	tests := map[string]reconcileTestCase{
 		"Create: Ultra-Minimalist (Shard Injection)": {
 			preReconcileUpdate: func(t testing.TB, c *multigresv1alpha1.MultigresCluster) {
-				c.Spec.Databases = nil // Clear databases, rely on auto-injection
+				c.Labels = nil         // Force tracking-label patch after defaulting.
+				c.Spec.Databases = nil // Clear databases, rely on auto-injection.
 			},
 			existingObjects: []client.Object{coreTpl, cellTpl, shardTpl},
 			validate: func(t testing.TB, c client.Client) {

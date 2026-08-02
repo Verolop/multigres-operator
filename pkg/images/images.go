@@ -97,7 +97,7 @@ func DefaultsFromEnv() (multigresv1alpha1.ComponentImages, map[string]string) {
 // Deployment's pod-template-hash plays for ReplicaSets. It is not a contract
 // external systems should reimplement: anything comparing image sets across
 // a process boundary (a version manifest checking a live cluster for drift,
-// for example) should compare the actual images in status.images.applied,
+// for example) should compare the actual images in status.images.effective,
 // not recompute this hash. String comparison needs no shared algorithm and
 // works the same in any language; a hash does, and won't.
 //
@@ -114,6 +114,19 @@ func Revision(set multigresv1alpha1.ComponentImages) string {
 	sort.Strings(lines)
 	h := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	return hex.EncodeToString(h[:])[:12]
+}
+
+// FromSpec returns only the component image fields from a cluster image spec.
+// Pull policy and pull secrets do not participate in image-set resolution.
+func FromSpec(spec multigresv1alpha1.ClusterImages) multigresv1alpha1.ComponentImages {
+	return multigresv1alpha1.ComponentImages{
+		Postgres:      spec.Postgres,
+		Multiadmin:    spec.Multiadmin,
+		MultiadminWeb: spec.MultiadminWeb,
+		Multiorch:     spec.Multiorch,
+		Multipooler:   spec.Multipooler,
+		Multigateway:  spec.Multigateway,
+	}
 }
 
 // IsComplete reports whether every component image in the set is non-empty.
