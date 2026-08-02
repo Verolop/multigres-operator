@@ -59,7 +59,11 @@ Nothing is written back into the spec. The resolved values are visible on the ch
 ```yaml
 status:
   images:
-    applied:                       # default set currently in use
+    effective:                     # complete set rendered into children
+      postgres: ghcr.io/multigres/pgctld:sha-54b4c18
+      ...
+    source: defaults               # explicit, defaults, or mixed
+    applied:                       # operator-default set used where unpinned
       postgres: ghcr.io/multigres/pgctld:sha-54b4c18
       ...
     appliedRevision: 1a2b3c4d5e6f  # identifies the applied set
@@ -70,7 +74,7 @@ status:
       reason: UpToDate
 ```
 
-The applied set is also recorded in the operator-owned `multigres.com/applied-images` annotation. That copy is the durable one: status can be lost on backup/restore or `kubectl replace`, and losing it must not roll the cluster onto new defaults. Do not edit or strip this annotation.
+When defaults participate, the applied default set is also recorded in the operator-owned `multigres.com/applied-images` annotation. That copy is the durable one: status can be lost on backup/restore or `kubectl replace`, and losing it must not roll the cluster onto new defaults. Do not edit or strip this annotation. When all six component images are explicitly pinned, the operator removes the annotation once and stops computing default revisions for that cluster; `status.images.source` is `explicit`, the effective set remains visible, and `ImageRolloutPending` reports `False` with reason `FullyPinned`.
 
 **Update strategies.** By default (`--image-update-strategy=immediate`), changing the operator's image configuration — a new operator build or a changed override — rolls every cluster on its next reconcile. With `--image-update-strategy=lazy`, each cluster keeps the default set it is already running: `status.images.availableRevision` advances to announce the new set, but the cluster adopts it only when the new revision is acknowledged in its spec:
 
@@ -92,7 +96,7 @@ kubectl patch multigrescluster <name> --type=merge -p '{"spec":{"images":{
   "multiorch":null,"multipooler":null,"multigateway":null}}}'
 ```
 
-Only clear values you did not set yourself. If you pin images deliberately, pin by digest rather than tag — a digest states intent unambiguously.
+Only clear values you did not set yourself. After a fully pinned period, the operator deliberately adopts its current defaults for any fields you clear; it never resurrects the default set that existed before the pins. Clearing only some fields produces `status.images.source: mixed`, because the remaining pins and current defaults are both part of the effective set. If you pin images deliberately, pin by digest rather than tag — a digest states intent unambiguously.
 
 ### 2. Shard Cell Assignments (`multiOrch.cells`, `pool.cells`)
 

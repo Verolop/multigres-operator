@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -13,12 +14,44 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	"github.com/multigres/multigres-operator/pkg/images"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
+
+type patchCountingClient struct {
+	client.Client
+	patches int
+}
+
+func (c *patchCountingClient) Patch(
+	ctx context.Context,
+	obj client.Object,
+	patch client.Patch,
+	opts ...client.PatchOption,
+) error {
+	c.patches++
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+type countingLogSink struct {
+	entries int
+}
+
+func (*countingLogSink) Init(logr.RuntimeInfo) {}
+
+func (*countingLogSink) Enabled(int) bool { return true }
+
+func (s *countingLogSink) Info(int, string, ...any) { s.entries++ }
+
+func (s *countingLogSink) Error(error, string, ...any) { s.entries++ }
+
+func (s *countingLogSink) WithValues(...any) logr.LogSink { return s }
+
+func (s *countingLogSink) WithName(string) logr.LogSink { return s }
 
 func testImagesConfig(strategy images.UpdateStrategy) images.Config {
 	return images.Config{
@@ -54,6 +87,17 @@ func mustJSON(t *testing.T, set multigresv1alpha1.ComponentImages) string {
 	return string(raw)
 }
 
+func clusterImages(set multigresv1alpha1.ComponentImages) multigresv1alpha1.ClusterImages {
+	return multigresv1alpha1.ClusterImages{
+		Postgres:      set.Postgres,
+		Multiadmin:    set.Multiadmin,
+		MultiadminWeb: set.MultiadminWeb,
+		Multiorch:     set.Multiorch,
+		Multipooler:   set.Multipooler,
+		Multigateway:  set.Multigateway,
+	}
+}
+
 // hasEvent drains the fake recorder and reports whether any buffered event
 // mentions the given reason.
 func hasEvent(t *testing.T, rec *record.FakeRecorder, reason string) bool {
@@ -78,11 +122,12 @@ func TestResolveImages(t *testing.T) {
 	newHarness := func(t *testing.T, strategy images.UpdateStrategy, cluster *multigresv1alpha1.MultigresCluster) *MultigresClusterReconciler {
 		t.Helper()
 		scheme := setupScheme()
-		c := fake.NewClientBuilder().
+		baseClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithObjects(cluster).
 			WithStatusSubresource(&multigresv1alpha1.MultigresCluster{}).
 			Build()
+		c := &patchCountingClient{Client: baseClient}
 		return &MultigresClusterReconciler{
 			Client:   c,
 			Scheme:   scheme,
@@ -121,6 +166,10 @@ func TestResolveImages(t *testing.T) {
 		}
 		if cluster.Spec.Images.Postgres != "test/pgctld:v2" {
 			t.Errorf("expected current default, got %s", cluster.Spec.Images.Postgres)
+		}
+		if cluster.Status.Images.Source != multigresv1alpha1.ImageSourceDefaults ||
+			cluster.Status.Images.Effective != testImagesConfig(images.UpdateImmediate).Defaults {
+			t.Errorf("unexpected effective image status: %+v", cluster.Status.Images)
 		}
 		if cond := pendingCond(cluster); cond == nil || cond.Status != metav1.ConditionFalse {
 			t.Errorf("expected ImageRolloutPending=False, got %+v", cond)
@@ -286,6 +335,138 @@ func TestResolveImages(t *testing.T) {
 		}
 		if cluster.Spec.Images.Multiorch != "test/multigres:v2" {
 			t.Errorf("unset field not resolved: %s", cluster.Spec.Images.Multiorch)
+		}
+		if cluster.Status.Images.Source != multigresv1alpha1.ImageSourceMixed ||
+			cluster.Status.Images.Effective.Postgres != "pinned/pgctld:v0" {
+			t.Errorf("unexpected mixed image status: %+v", cluster.Status.Images)
+		}
+	})
+
+	t.Run("partial unpin after fully pinned adopts current defaults", func(t *testing.T) {
+		cluster := newCluster(nil, nil)
+		r := newHarness(t, images.UpdateLazy, cluster)
+		counter := r.Client.(*patchCountingClient)
+
+		old := olderApplied()
+		r.Images.Defaults = old
+		if err := r.resolveImages(context.Background(), cluster); err != nil {
+			t.Fatal(err)
+		}
+		if counter.patches != 1 {
+			t.Fatalf("initial default record patches = %d, want 1", counter.patches)
+		}
+
+		pinned := multigresv1alpha1.ComponentImages{
+			Postgres:      "pinned/pgctld:v3",
+			Multiadmin:    "pinned/multigres:v3",
+			MultiadminWeb: "pinned/web:v3",
+			Multiorch:     "pinned/multigres:v3",
+			Multipooler:   "pinned/multigres:v3",
+			Multigateway:  "pinned/multigres:v3",
+		}
+		cluster.Spec.Images = clusterImages(pinned)
+		r.Images = testImagesConfig(images.UpdateLazy)
+		sink := &countingLogSink{}
+		pinnedCtx := logr.NewContext(context.Background(), logr.New(sink))
+		rec := r.Recorder.(*record.FakeRecorder)
+
+		if err := r.resolveImages(pinnedCtx, cluster); err != nil {
+			t.Fatal(err)
+		}
+		if counter.patches != 2 {
+			t.Fatalf("pin transition patches = %d, want exactly 2 total", counter.patches)
+		}
+		if _, present := cluster.Annotations[metadata.AnnotationAppliedImages]; present {
+			t.Fatal("applied-images annotation was not removed on pin transition")
+		}
+		if sink.entries != 0 || hasEvent(t, rec, "") {
+			t.Fatalf("pin transition emitted image activity: logs=%d", sink.entries)
+		}
+		if got := cluster.Status.Images; got.Source != multigresv1alpha1.ImageSourceExplicit ||
+			got.Effective != pinned || got.Applied != (multigresv1alpha1.ComponentImages{}) ||
+			got.AppliedRevision != "" || got.AvailableRevision != "" || got.UpdateStrategy != "" {
+			t.Fatalf("unexpected fully pinned status: %+v", got)
+		}
+		cond := pendingCond(cluster)
+		if cond == nil || cond.Status != metav1.ConditionFalse ||
+			cond.Reason != multigresv1alpha1.ReasonFullyPinned {
+			t.Fatalf("expected FullyPinned condition, got %+v", cond)
+		}
+
+		if err := r.resolveImages(pinnedCtx, cluster); err != nil {
+			t.Fatal(err)
+		}
+		if counter.patches != 2 || sink.entries != 0 || hasEvent(t, rec, "") {
+			t.Fatalf("steady pinned reconcile was not quiet: patches=%d logs=%d",
+				counter.patches, sink.entries)
+		}
+
+		cluster.Spec.Images.Postgres = ""
+		if err := r.resolveImages(context.Background(), cluster); err != nil {
+			t.Fatal(err)
+		}
+		current := testImagesConfig(images.UpdateLazy).Defaults
+		if cluster.Spec.Images.Postgres != current.Postgres {
+			t.Fatalf("partial unpin restored %q, want current default %q",
+				cluster.Spec.Images.Postgres, current.Postgres)
+		}
+		if cluster.Status.Images.Source != multigresv1alpha1.ImageSourceMixed ||
+			cluster.Status.Images.Effective.Postgres != current.Postgres {
+			t.Fatalf("unexpected partial-unpin status: %+v", cluster.Status.Images)
+		}
+		stored := &multigresv1alpha1.MultigresCluster{}
+		if err := r.Get(context.Background(), key, stored); err != nil {
+			t.Fatal(err)
+		}
+		wantAnnotation := mustJSON(t, current)
+		if got := stored.Annotations[metadata.AnnotationAppliedImages]; got != wantAnnotation {
+			t.Fatalf("partial unpin recorded %q, want current defaults", got)
+		}
+	})
+
+	t.Run("fully pinned to fully unpinned adopts current defaults", func(t *testing.T) {
+		pinned := multigresv1alpha1.ComponentImages{
+			Postgres:      "pinned/pgctld:v3",
+			Multiadmin:    "pinned/multigres:v3",
+			MultiadminWeb: "pinned/web:v3",
+			Multiorch:     "pinned/multigres:v3",
+			Multipooler:   "pinned/multigres:v3",
+			Multigateway:  "pinned/multigres:v3",
+		}
+		old := olderApplied()
+		cluster := newCluster(map[string]string{
+			metadata.AnnotationAppliedImages: mustJSON(t, old),
+		}, nil)
+		cluster.Spec.Images = clusterImages(pinned)
+		r := newHarness(t, images.UpdateLazy, cluster)
+		counter := r.Client.(*patchCountingClient)
+
+		if err := r.resolveImages(context.Background(), cluster); err != nil {
+			t.Fatal(err)
+		}
+		if counter.patches != 1 {
+			t.Fatalf("pin transition patches = %d, want 1", counter.patches)
+		}
+
+		cluster.Spec.Images = multigresv1alpha1.ClusterImages{}
+		if err := r.resolveImages(context.Background(), cluster); err != nil {
+			t.Fatal(err)
+		}
+		current := testImagesConfig(images.UpdateLazy).Defaults
+		if got := images.FromSpec(cluster.Spec.Images); got != current {
+			t.Fatalf("full unpin resolved %+v, want current defaults %+v", got, current)
+		}
+		if cluster.Status.Images.Source != multigresv1alpha1.ImageSourceDefaults ||
+			cluster.Status.Images.Effective != current {
+			t.Fatalf("unexpected full-unpin status: %+v", cluster.Status.Images)
+		}
+		stored := &multigresv1alpha1.MultigresCluster{}
+		if err := r.Get(context.Background(), key, stored); err != nil {
+			t.Fatal(err)
+		}
+		wantAnnotation := mustJSON(t, current)
+		if got := stored.Annotations[metadata.AnnotationAppliedImages]; got != wantAnnotation {
+			t.Fatalf("full unpin recorded %q, want current defaults", got)
 		}
 	})
 
