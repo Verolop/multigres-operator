@@ -16,6 +16,12 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
 
+// appliedImagesFullyPinned is a durable tombstone indicating that the last
+// image-resolution state was fully explicit. It prevents stale status from
+// being treated as the previous default set if a pin is later removed after
+// an interrupted reconcile.
+const appliedImagesFullyPinned = `"fully-pinned"`
+
 // imagesConfig returns the reconciler's image configuration, falling back to
 // the compiled-in defaults with the immediate strategy when unset.
 func (r *MultigresClusterReconciler) imagesConfig() images.Config {
@@ -35,9 +41,10 @@ func (r *MultigresClusterReconciler) imagesConfig() images.Config {
 // operator's default image set. Nothing is written into the spec.
 //
 // A fully pinned cluster does not participate in operator-default resolution.
-// On the transition to that state, any applied-images annotation is removed
-// once so it cannot go stale and later influence an unpinned cluster. Steady
-// state fully pinned reconciles do no default-image API, event, or log work.
+// On the transition to that state, any applied-images record is replaced once
+// with a tombstone so stale status cannot later influence an unpinned cluster.
+// Steady state fully pinned reconciles do no default-image API, event, or log
+// work.
 //
 // Under the lazy update strategy, a cluster already running an older default
 // set keeps it until spec.imageUpdatePolicy.acknowledgedRevision names the
@@ -58,7 +65,7 @@ func (r *MultigresClusterReconciler) resolveImages(
 ) error {
 	explicit := images.FromSpec(cluster.Spec.Images)
 	if images.IsComplete(explicit) {
-		if err := r.clearAppliedImages(ctx, cluster); err != nil {
+		if err := r.recordFullyPinned(ctx, cluster); err != nil {
 			return err
 		}
 
@@ -91,10 +98,17 @@ func (r *MultigresClusterReconciler) resolveImages(
 
 	recorded, recordInvalid := r.recordedImages(ctx, cluster)
 	if recordInvalid && recorded == nil {
-		// The durable record existed but is unusable and status offers no
-		// fallback. Adopting current defaults is the only option left, but it
-		// must be loud: this is the silent-roll path the record exists to
-		// prevent.
+		// Lazy mode exists to prevent an unacknowledged rollout. If neither the
+		// durable record nor status can identify the set to hold, stop before
+		// patching the record or reconciling children. Immediate mode can safely
+		// recover by adopting the current defaults.
+		if cfg.Strategy == images.UpdateLazy {
+			return fmt.Errorf(
+				"cannot resolve images with lazy update strategy: %s annotation is invalid and status.images has no complete applied set",
+				metadata.AnnotationAppliedImages,
+			)
+		}
+
 		r.Recorder.Eventf(cluster, "Warning", "ImagesRecordInvalid",
 			"The %s annotation is invalid and status.images is unavailable; "+
 				"adopting the current default image set %s",
@@ -156,6 +170,7 @@ func (r *MultigresClusterReconciler) resolveImages(
 		Source:            source,
 		Applied:           applied,
 		AppliedRevision:   appliedRevision,
+		Available:         available,
 		AvailableRevision: availableRevision,
 	}
 
@@ -191,26 +206,28 @@ func (r *MultigresClusterReconciler) resolveImages(
 	return nil
 }
 
-// clearAppliedImages removes the durable operator-default record when all
-// component images become explicit. Clearing it prevents a later partial or
-// complete unpin from resurrecting defaults recorded before the pinned
-// period. The patch is applied to a copy so the API response cannot discard
-// other in-memory defaults from this reconcile pass.
-func (r *MultigresClusterReconciler) clearAppliedImages(
+// recordFullyPinned replaces the durable operator-default record with a
+// tombstone when all component images become explicit. The tombstone prevents
+// a later unpin from falling back to stale status if this reconcile stops
+// before the fully pinned status is persisted.
+func (r *MultigresClusterReconciler) recordFullyPinned(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
 ) error {
-	if _, present := cluster.Annotations[metadata.AnnotationAppliedImages]; !present {
+	if cluster.Annotations[metadata.AnnotationAppliedImages] == appliedImagesFullyPinned {
 		return nil
 	}
 
 	obj := cluster.DeepCopy()
 	base := obj.DeepCopy()
-	delete(obj.Annotations, metadata.AnnotationAppliedImages)
+	if obj.Annotations == nil {
+		obj.Annotations = map[string]string{}
+	}
+	obj.Annotations[metadata.AnnotationAppliedImages] = appliedImagesFullyPinned
 	if err := r.Patch(ctx, obj, client.MergeFromWithOptions(
 		base, client.MergeFromWithOptimisticLock{},
 	)); err != nil {
-		return fmt.Errorf("failed to clear applied images: %w", err)
+		return fmt.Errorf("failed to record fully pinned images: %w", err)
 	}
 
 	cluster.Annotations = obj.Annotations
@@ -224,14 +241,18 @@ func (r *MultigresClusterReconciler) clearAppliedImages(
 // every component. A partial set would resolve some components from the
 // record and silently drop the rest to compiled-in fallbacks.
 //
-// Nil with invalid=false means no record: a new cluster. Nil with
-// invalid=true means a record existed but was unusable; the caller decides
-// the failure posture.
+// Nil with invalid=false means no default set should be recovered: either a
+// new cluster or a cluster leaving fully pinned mode. Nil with invalid=true
+// means a record existed but was unusable; the caller decides the failure
+// posture.
 func (r *MultigresClusterReconciler) recordedImages(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
 ) (set *multigresv1alpha1.ComponentImages, invalid bool) {
-	if raw := cluster.Annotations[metadata.AnnotationAppliedImages]; raw != "" {
+	if raw, present := cluster.Annotations[metadata.AnnotationAppliedImages]; present {
+		if raw == appliedImagesFullyPinned {
+			return nil, false
+		}
 		var recorded multigresv1alpha1.ComponentImages
 		err := json.Unmarshal([]byte(raw), &recorded)
 		if err == nil && images.IsComplete(recorded) {

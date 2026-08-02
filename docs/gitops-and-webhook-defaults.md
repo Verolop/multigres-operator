@@ -38,6 +38,17 @@ All of this is visible via `kubectl get multigrescluster -o yaml`.
 
 The webhook is the **primary** path, but the operator does not depend on it. The reconciler applies the exact same defaults in-memory using the same shared `resolver` package. If the webhook is unavailable (e.g., during local development without cert-manager), the operator still functions — defaults are just "invisible" to `kubectl get`.
 
+### Operator upgrades
+
+The operator Deployment uses the `Recreate` strategy so old and new defaulting
+webhooks are never served behind the same Service. This matters when a release
+changes admission behavior: concurrent webhook versions could otherwise store
+different specs for identical requests. During an operator upgrade, create and
+update requests covered by the webhooks may be rejected briefly because the
+webhooks use `failurePolicy: Fail`. Existing workloads continue running, and
+admission resumes when the new operator Pod is ready. Wait for the Deployment
+rollout to complete before applying `MultigresCluster` changes.
+
 ---
 
 ## Intentionally Dynamic Fields
@@ -67,6 +78,9 @@ status:
       postgres: ghcr.io/multigres/pgctld:sha-54b4c18
       ...
     appliedRevision: 1a2b3c4d5e6f  # identifies the applied set
+    available:                       # operator's current default set
+      postgres: ghcr.io/multigres/pgctld:sha-54b4c18
+      ...
     availableRevision: 1a2b3c4d5e6f # the operator's current default set
   conditions:
     - type: ImageRolloutPending    # True when a newer set awaits adoption
@@ -74,7 +88,7 @@ status:
       reason: UpToDate
 ```
 
-When defaults participate, the applied default set is also recorded in the operator-owned `multigres.com/applied-images` annotation. That copy is the durable one: status can be lost on backup/restore or `kubectl replace`, and losing it must not roll the cluster onto new defaults. Do not edit or strip this annotation. When all six component images are explicitly pinned, the operator removes the annotation once and stops computing default revisions for that cluster; `status.images.source` is `explicit`, the effective set remains visible, and `ImageRolloutPending` reports `False` with reason `FullyPinned`.
+When defaults participate, the applied default set is also recorded in the operator-owned `multigres.com/applied-images` annotation. That copy is the durable one: status can be lost on backup/restore or `kubectl replace`, and losing it must not roll the cluster onto new defaults. Do not edit or strip this annotation. When all six component images are explicitly pinned, the operator replaces the old set with a small fully-pinned tombstone once and stops computing default revisions for that cluster. The tombstone prevents stale status from being revived if a pin is later removed after an interrupted reconcile. `status.images.source` is `explicit`, the effective set remains visible, and `ImageRolloutPending` reports `False` with reason `FullyPinned`.
 
 **Update strategies.** By default (`--image-update-strategy=immediate`), changing the operator's image configuration — a new operator build or a changed override — rolls every cluster on its next reconcile. With `--image-update-strategy=lazy`, each cluster keeps the default set it is already running: `status.images.availableRevision` advances to announce the new set, but the cluster adopts it only when the new revision is acknowledged in its spec:
 

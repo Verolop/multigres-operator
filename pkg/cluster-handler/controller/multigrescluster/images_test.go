@@ -192,6 +192,13 @@ func TestResolveImages(t *testing.T) {
 		if cluster.Status.Images.AppliedRevision == cluster.Status.Images.AvailableRevision {
 			t.Error("expected a pending rollout (applied != available)")
 		}
+		if cluster.Status.Images.Applied != old ||
+			cluster.Status.Images.Available != testImagesConfig(images.UpdateLazy).Defaults {
+			t.Errorf(
+				"status does not expose applied and available sets: %+v",
+				cluster.Status.Images,
+			)
+		}
 		if cluster.Status.Images.UpdateStrategy != string(images.UpdateLazy) {
 			t.Errorf("status must report the running strategy, got %q",
 				cluster.Status.Images.UpdateStrategy)
@@ -376,15 +383,16 @@ func TestResolveImages(t *testing.T) {
 		if counter.patches != 2 {
 			t.Fatalf("pin transition patches = %d, want exactly 2 total", counter.patches)
 		}
-		if _, present := cluster.Annotations[metadata.AnnotationAppliedImages]; present {
-			t.Fatal("applied-images annotation was not removed on pin transition")
+		if got := cluster.Annotations[metadata.AnnotationAppliedImages]; got != appliedImagesFullyPinned {
+			t.Fatalf("applied-images annotation = %q, want fully-pinned tombstone", got)
 		}
 		if sink.entries != 0 || hasEvent(t, rec, "") {
 			t.Fatalf("pin transition emitted image activity: logs=%d", sink.entries)
 		}
 		if got := cluster.Status.Images; got.Source != multigresv1alpha1.ImageSourceExplicit ||
 			got.Effective != pinned || got.Applied != (multigresv1alpha1.ComponentImages{}) ||
-			got.AppliedRevision != "" || got.AvailableRevision != "" || got.UpdateStrategy != "" {
+			got.AppliedRevision != "" || got.Available != (multigresv1alpha1.ComponentImages{}) ||
+			got.AvailableRevision != "" || got.UpdateStrategy != "" {
 			t.Fatalf("unexpected fully pinned status: %+v", got)
 		}
 		cond := pendingCond(cluster)
@@ -421,6 +429,53 @@ func TestResolveImages(t *testing.T) {
 		wantAnnotation := mustJSON(t, current)
 		if got := stored.Annotations[metadata.AnnotationAppliedImages]; got != wantAnnotation {
 			t.Fatalf("partial unpin recorded %q, want current defaults", got)
+		}
+	})
+
+	t.Run("fully pinned tombstone survives interrupted status update", func(t *testing.T) {
+		old := olderApplied()
+		pinned := multigresv1alpha1.ComponentImages{
+			Postgres:      "pinned/pgctld:v3",
+			Multiadmin:    "pinned/multigres:v3",
+			MultiadminWeb: "pinned/web:v3",
+			Multiorch:     "pinned/multigres:v3",
+			Multipooler:   "pinned/multigres:v3",
+			Multigateway:  "pinned/multigres:v3",
+		}
+		cluster := newCluster(map[string]string{
+			metadata.AnnotationAppliedImages: mustJSON(t, old),
+		}, &multigresv1alpha1.ImagesStatus{
+			Applied:         old,
+			AppliedRevision: images.Revision(old),
+		})
+		cluster.Spec.Images = clusterImages(pinned)
+		r := newHarness(t, images.UpdateLazy, cluster)
+
+		// Simulate reconciliation stopping after image resolution but before
+		// the in-memory fully pinned status is persisted.
+		if err := r.resolveImages(context.Background(), cluster); err != nil {
+			t.Fatal(err)
+		}
+		stored := &multigresv1alpha1.MultigresCluster{}
+		if err := r.Get(context.Background(), key, stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status.Images.Applied != old {
+			t.Fatalf("test setup lost stale status: %+v", stored.Status.Images)
+		}
+		stored.Spec.Images.Postgres = ""
+		if err := r.Update(context.Background(), stored); err != nil {
+			t.Fatal(err)
+		}
+		fresh := &multigresv1alpha1.MultigresCluster{}
+		if err := r.Get(context.Background(), key, fresh); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.resolveImages(context.Background(), fresh); err != nil {
+			t.Fatal(err)
+		}
+		if fresh.Spec.Images.Postgres != testImagesConfig(images.UpdateLazy).Defaults.Postgres {
+			t.Fatalf("unpin restored stale image %q", fresh.Spec.Images.Postgres)
 		}
 	})
 
@@ -470,19 +525,38 @@ func TestResolveImages(t *testing.T) {
 		}
 	})
 
-	t.Run("corrupted annotation with no status holds nothing but warns", func(t *testing.T) {
+	t.Run("corrupt state fails closed under lazy strategy", func(t *testing.T) {
 		cluster := newCluster(map[string]string{
 			metadata.AnnotationAppliedImages: "{not json",
 		}, nil)
 		r := newHarness(t, images.UpdateLazy, cluster)
 		rec := r.Recorder.(*record.FakeRecorder)
+		counter := r.Client.(*patchCountingClient)
 
-		if err := r.resolveImages(context.Background(), cluster); err != nil {
-			t.Fatal(err)
+		err := r.resolveImages(context.Background(), cluster)
+		if err == nil || !strings.Contains(err.Error(), "lazy update strategy") {
+			t.Fatalf("resolveImages() error = %v, want lazy state error", err)
 		}
-		// Nothing usable to hold: adopts, but must warn.
-		if cluster.Spec.Images.Postgres != "test/pgctld:v2" {
-			t.Errorf("expected adoption of current defaults, got %s", cluster.Spec.Images.Postgres)
+		if cluster.Spec.Images.Postgres != "" {
+			t.Errorf("corrupt lazy state resolved image %q", cluster.Spec.Images.Postgres)
+		}
+		if counter.patches != 0 {
+			t.Errorf("corrupt lazy state performed %d patches, want 0", counter.patches)
+		}
+		if !hasEvent(t, rec, "ImagesRecordInvalid") {
+			t.Error("expected ImagesRecordInvalid warning event")
+		}
+	})
+
+	t.Run("empty annotation fails closed under lazy strategy", func(t *testing.T) {
+		cluster := newCluster(map[string]string{
+			metadata.AnnotationAppliedImages: "",
+		}, nil)
+		r := newHarness(t, images.UpdateLazy, cluster)
+		rec := r.Recorder.(*record.FakeRecorder)
+
+		if err := r.resolveImages(context.Background(), cluster); err == nil {
+			t.Fatal("resolveImages() error = nil, want invalid lazy state error")
 		}
 		if !hasEvent(t, rec, "ImagesRecordInvalid") {
 			t.Error("expected ImagesRecordInvalid warning event")
@@ -507,7 +581,7 @@ func TestResolveImages(t *testing.T) {
 		}
 	})
 
-	t.Run("partial annotation is rejected, not half-applied", func(t *testing.T) {
+	t.Run("partial annotation fails closed under lazy strategy", func(t *testing.T) {
 		// A recorded set missing components must not resolve some components
 		// from the record and drop the rest to compiled-in fallbacks.
 		cluster := newCluster(map[string]string{
@@ -516,12 +590,29 @@ func TestResolveImages(t *testing.T) {
 		r := newHarness(t, images.UpdateLazy, cluster)
 		rec := r.Recorder.(*record.FakeRecorder)
 
+		if err := r.resolveImages(context.Background(), cluster); err == nil {
+			t.Fatal("resolveImages() error = nil, want invalid lazy state error")
+		}
+		if cluster.Spec.Images.Postgres != "" || cluster.Spec.Images.Multiorch != "" {
+			t.Errorf("partial lazy record resolved images: %+v", cluster.Spec.Images)
+		}
+		if !hasEvent(t, rec, "ImagesRecordInvalid") {
+			t.Error("expected ImagesRecordInvalid warning event")
+		}
+	})
+
+	t.Run("corrupt state recovers under immediate strategy", func(t *testing.T) {
+		cluster := newCluster(map[string]string{
+			metadata.AnnotationAppliedImages: "{not json",
+		}, nil)
+		r := newHarness(t, images.UpdateImmediate, cluster)
+		rec := r.Recorder.(*record.FakeRecorder)
+
 		if err := r.resolveImages(context.Background(), cluster); err != nil {
 			t.Fatal(err)
 		}
-		if cluster.Spec.Images.Postgres != "test/pgctld:v2" ||
-			cluster.Spec.Images.Multiorch != "test/multigres:v2" {
-			t.Errorf("expected uniform current defaults, got %+v", cluster.Spec.Images)
+		if cluster.Spec.Images.Postgres != "test/pgctld:v2" {
+			t.Errorf("expected current defaults, got %s", cluster.Spec.Images.Postgres)
 		}
 		if !hasEvent(t, rec, "ImagesRecordInvalid") {
 			t.Error("expected ImagesRecordInvalid warning event")
