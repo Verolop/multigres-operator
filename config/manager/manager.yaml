@@ -17,6 +17,11 @@ metadata:
     app.kubernetes.io/name: multigres-operator
     app.kubernetes.io/managed-by: kustomize
 spec:
+  # Admission defaulting semantics can change between operator releases. Do
+  # not serve old and new webhook implementations behind the same Service.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       control-plane: controller-manager

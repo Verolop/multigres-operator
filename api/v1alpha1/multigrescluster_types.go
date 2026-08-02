@@ -284,6 +284,11 @@ type ImagesStatus struct {
 	// +optional
 	AppliedRevision string `json:"appliedRevision,omitempty"`
 
+	// Available is the operator's current default image set. Under the lazy
+	// update strategy, this is the set that AvailableRevision authorizes.
+	// +optional
+	Available ComponentImages `json:"available,omitempty"`
+
 	// AvailableRevision identifies the operator's current default image set.
 	// When it differs from appliedRevision, a new set is available but has not
 	// been adopted yet; with the lazy update strategy, adoption waits for
