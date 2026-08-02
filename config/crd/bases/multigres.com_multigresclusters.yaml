@@ -10899,6 +10899,42 @@ spec:
                     description: AppliedRevision identifies the applied default image
                       set.
                     type: string
+                  available:
+                    description: |-
+                      Available is the operator's current default image set. Under the lazy
+                      update strategy, this is the set that AvailableRevision authorizes.
+                    properties:
+                      multiadmin:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiadminWeb:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multigateway:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiorch:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multipooler:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      postgres:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                    type: object
                   availableRevision:
                     description: |-
                       AvailableRevision identifies the operator's current default image set.
