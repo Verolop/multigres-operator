@@ -10854,12 +10854,15 @@ spec:
                 - externalEndpoint
                 type: object
               images:
-                description: Images reports the operator-default image rollout state.
+                description: |-
+                  Images reports the effective component images and operator-default
+                  rollout state when defaults participate.
                 properties:
                   applied:
                     description: |-
-                      Applied is the operator-default image set currently used for components
-                      that are not explicitly set in spec.images.
+                      Applied is the operator-default image set committed for components that
+                      are not explicitly set in spec.images. It is empty when source is
+                      explicit because defaults do not participate.
                     properties:
                       multiadmin:
                         description: ImageRef is a container image reference.
@@ -10903,6 +10906,51 @@ spec:
                       been adopted yet; with the lazy update strategy, adoption waits for
                       spec.imageUpdatePolicy.acknowledgedRevision to be set to this value.
                     type: string
+                  effective:
+                    description: |-
+                      Effective is the complete image set currently selected for child
+                      resources after explicit pins and operator defaults are combined.
+                    properties:
+                      multiadmin:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiadminWeb:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multigateway:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multiorch:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      multipooler:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      postgres:
+                        description: ImageRef is a container image reference.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                    type: object
+                  source:
+                    description: |-
+                      Source identifies whether effective images come from explicit spec pins,
+                      operator defaults, or a mixture of both.
+                    enum:
+                    - explicit
+                    - defaults
+                    - mixed
+                    type: string
                   updateStrategy:
                     description: |-
                       UpdateStrategy is the strategy in effect for this cluster:
@@ -10911,6 +10959,9 @@ spec:
                       spec.imageUpdatePolicy.acknowledgedRevision has any effect: "lazy"
                       consults it, "immediate" ignores it.
                     type: string
+                required:
+                - effective
+                - source
                 type: object
               message:
                 description: Message provides details about the current phase (e.g.

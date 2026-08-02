@@ -237,9 +237,26 @@ type ComponentImages struct {
 	Postgres ImageRef `json:"postgres,omitempty"`
 }
 
-// ImagesStatus reports which operator-default images the cluster is running
-// and whether a newer default set is available. Components explicitly pinned
-// in spec.images are unaffected by this state.
+// ImageSource describes how the effective component images were selected.
+// +kubebuilder:validation:Enum=explicit;defaults;mixed
+type ImageSource string
+
+const (
+	// ImageSourceExplicit means every component image is explicitly pinned in
+	// spec.images, so operator defaults do not participate.
+	ImageSourceExplicit ImageSource = "explicit"
+
+	// ImageSourceDefaults means every component image comes from the
+	// operator-managed default set.
+	ImageSourceDefaults ImageSource = "defaults"
+
+	// ImageSourceMixed means spec.images pins some components while the
+	// operator-managed default set supplies the rest.
+	ImageSourceMixed ImageSource = "mixed"
+)
+
+// ImagesStatus reports the effective component images and, when defaults
+// participate, the operator-default rollout state.
 type ImagesStatus struct {
 	// UpdateStrategy is the strategy in effect for this cluster:
 	// spec.imageUpdatePolicy.strategy when set, otherwise the operator's
@@ -249,10 +266,19 @@ type ImagesStatus struct {
 	// +optional
 	UpdateStrategy string `json:"updateStrategy,omitempty"`
 
-	// Applied is the operator-default image set currently used for components
-	// that are not explicitly set in spec.images.
+	// Effective is the complete image set currently selected for child
+	// resources after explicit pins and operator defaults are combined.
+	Effective ComponentImages `json:"effective"`
+
+	// Source identifies whether effective images come from explicit spec pins,
+	// operator defaults, or a mixture of both.
+	Source ImageSource `json:"source"`
+
+	// Applied is the operator-default image set committed for components that
+	// are not explicitly set in spec.images. It is empty when source is
+	// explicit because defaults do not participate.
 	// +optional
-	Applied ComponentImages `json:"applied"`
+	Applied ComponentImages `json:"applied,omitempty"`
 
 	// AppliedRevision identifies the applied default image set.
 	// +optional
@@ -584,6 +610,10 @@ const (
 	// ReasonImagesUpToDate indicates the cluster runs the operator's current
 	// default image set.
 	ReasonImagesUpToDate = "UpToDate"
+
+	// ReasonFullyPinned indicates every component image is explicitly set and
+	// operator-default rollout state does not apply.
+	ReasonFullyPinned = "FullyPinned"
 )
 
 // ============================================================================
@@ -681,7 +711,8 @@ type MultigresClusterStatus struct {
 	// +optional
 	ResolvedTemplates *ResolvedTemplates `json:"resolvedTemplates,omitempty"`
 
-	// Images reports the operator-default image rollout state.
+	// Images reports the effective component images and operator-default
+	// rollout state when defaults participate.
 	// +optional
 	Images *ImagesStatus `json:"images,omitempty"`
 }

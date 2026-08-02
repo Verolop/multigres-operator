@@ -140,11 +140,14 @@ func (r *MultigresClusterReconciler) Reconcile(
 	// Apply tracking labels for efficient webhook template-in-use lookups.
 	{
 		trackingLabels := collectTrackingLabels(cluster)
+		// Patch a copy because Patch refreshes its target from the API response.
+		// Refreshing cluster itself would discard the in-memory defaults above.
+		obj := cluster.DeepCopy()
 		labelsChanged := false
-		if cluster.Labels == nil {
-			cluster.Labels = make(map[string]string)
+		if obj.Labels == nil {
+			obj.Labels = make(map[string]string)
 		}
-		patch := client.MergeFrom(cluster.DeepCopy())
+		patch := client.MergeFrom(obj.DeepCopy())
 		trackingKeys := []string{
 			metadata.LabelUsesCoreTemplate,
 			metadata.LabelUsesCellTemplate,
@@ -152,20 +155,22 @@ func (r *MultigresClusterReconciler) Reconcile(
 		}
 		for _, key := range trackingKeys {
 			if want, ok := trackingLabels[key]; ok {
-				if cluster.Labels[key] != want {
-					cluster.Labels[key] = want
+				if obj.Labels[key] != want {
+					obj.Labels[key] = want
 					labelsChanged = true
 				}
-			} else if _, exists := cluster.Labels[key]; exists {
-				delete(cluster.Labels, key)
+			} else if _, exists := obj.Labels[key]; exists {
+				delete(obj.Labels, key)
 				labelsChanged = true
 			}
 		}
 		if labelsChanged {
-			if err := r.Patch(ctx, cluster, patch); err != nil {
+			if err := r.Patch(ctx, obj, patch); err != nil {
 				l.Error(err, "Failed to patch tracking labels")
 				return ctrl.Result{}, fmt.Errorf("failed to patch tracking labels: %w", err)
 			}
+			cluster.Labels = obj.Labels
+			cluster.ResourceVersion = obj.ResourceVersion
 			l.V(1).Info("Patched tracking labels on cluster")
 		}
 	}

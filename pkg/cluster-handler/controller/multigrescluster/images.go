@@ -34,6 +34,11 @@ func (r *MultigresClusterReconciler) imagesConfig() images.Config {
 // values are user pins and always win; everything else comes from the
 // operator's default image set. Nothing is written into the spec.
 //
+// A fully pinned cluster does not participate in operator-default resolution.
+// On the transition to that state, any applied-images annotation is removed
+// once so it cannot go stale and later influence an unpinned cluster. Steady
+// state fully pinned reconciles do no default-image API, event, or log work.
+//
 // Under the lazy update strategy, a cluster already running an older default
 // set keeps it until spec.imageUpdatePolicy.acknowledgedRevision names the
 // current set's revision. The control plane pacing a fleet upgrade moves only
@@ -51,6 +56,32 @@ func (r *MultigresClusterReconciler) resolveImages(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
 ) error {
+	explicit := images.FromSpec(cluster.Spec.Images)
+	if images.IsComplete(explicit) {
+		if err := r.clearAppliedImages(ctx, cluster); err != nil {
+			return err
+		}
+
+		cluster.Status.Images = &multigresv1alpha1.ImagesStatus{
+			Effective: explicit,
+			Source:    multigresv1alpha1.ImageSourceExplicit,
+		}
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               multigresv1alpha1.ConditionImageRolloutPending,
+			Status:             metav1.ConditionFalse,
+			Reason:             multigresv1alpha1.ReasonFullyPinned,
+			Message:            "All component images are explicitly pinned",
+			ObservedGeneration: cluster.Generation,
+			LastTransitionTime: metav1.Now(),
+		})
+		return nil
+	}
+
+	source := multigresv1alpha1.ImageSourceMixed
+	if explicit == (multigresv1alpha1.ComponentImages{}) {
+		source = multigresv1alpha1.ImageSourceDefaults
+	}
+
 	cfg := r.imagesConfig()
 	if p := cluster.Spec.ImageUpdatePolicy; p != nil && p.Strategy != "" {
 		cfg.Strategy = images.UpdateStrategy(p.Strategy)
@@ -117,18 +148,25 @@ func (r *MultigresClusterReconciler) resolveImages(
 		return err
 	}
 
+	images.Complete(&cluster.Spec.Images, applied)
+	effective := images.FromSpec(cluster.Spec.Images)
 	cluster.Status.Images = &multigresv1alpha1.ImagesStatus{
 		UpdateStrategy:    string(cfg.Strategy),
+		Effective:         effective,
+		Source:            source,
 		Applied:           applied,
 		AppliedRevision:   appliedRevision,
 		AvailableRevision: availableRevision,
 	}
 
 	cond := metav1.Condition{
-		Type:               multigresv1alpha1.ConditionImageRolloutPending,
-		Status:             metav1.ConditionFalse,
-		Reason:             multigresv1alpha1.ReasonImagesUpToDate,
-		Message:            fmt.Sprintf("Running default image set %s", appliedRevision),
+		Type:   multigresv1alpha1.ConditionImageRolloutPending,
+		Status: metav1.ConditionFalse,
+		Reason: multigresv1alpha1.ReasonImagesUpToDate,
+		Message: fmt.Sprintf(
+			"Operator-managed components use default image set %s",
+			appliedRevision,
+		),
 		ObservedGeneration: cluster.Generation,
 		LastTransitionTime: metav1.Now(),
 	}
@@ -136,9 +174,11 @@ func (r *MultigresClusterReconciler) resolveImages(
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = pendingReason
 		cond.Message = fmt.Sprintf(
-			"Default image set %s is available but not adopted; holding %s "+
+			"Default image set %s is available but not adopted for operator-managed components; holding %s "+
 				"until spec.imageUpdatePolicy.acknowledgedRevision is set to %q",
-			availableRevision, appliedRevision, availableRevision,
+			availableRevision,
+			appliedRevision,
+			availableRevision,
 		)
 		if pendingReason == multigresv1alpha1.ReasonRevisionMismatch {
 			r.Recorder.Eventf(cluster, "Warning", "ImagesRevisionMismatch",
@@ -148,8 +188,33 @@ func (r *MultigresClusterReconciler) resolveImages(
 		}
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, cond)
+	return nil
+}
 
-	images.Complete(&cluster.Spec.Images, applied)
+// clearAppliedImages removes the durable operator-default record when all
+// component images become explicit. Clearing it prevents a later partial or
+// complete unpin from resurrecting defaults recorded before the pinned
+// period. The patch is applied to a copy so the API response cannot discard
+// other in-memory defaults from this reconcile pass.
+func (r *MultigresClusterReconciler) clearAppliedImages(
+	ctx context.Context,
+	cluster *multigresv1alpha1.MultigresCluster,
+) error {
+	if _, present := cluster.Annotations[metadata.AnnotationAppliedImages]; !present {
+		return nil
+	}
+
+	obj := cluster.DeepCopy()
+	base := obj.DeepCopy()
+	delete(obj.Annotations, metadata.AnnotationAppliedImages)
+	if err := r.Patch(ctx, obj, client.MergeFromWithOptions(
+		base, client.MergeFromWithOptimisticLock{},
+	)); err != nil {
+		return fmt.Errorf("failed to clear applied images: %w", err)
+	}
+
+	cluster.Annotations = obj.Annotations
+	cluster.ResourceVersion = obj.ResourceVersion
 	return nil
 }
 

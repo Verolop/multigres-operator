@@ -33,7 +33,9 @@ Component images are operator configuration, resolved at reconcile time: the
 operator uses its compiled-in defaults for any component not explicitly set in
 `spec.images`, and each default can be overridden on the operator Deployment.
 Explicit `spec.images` values always win. The resolved default set and its
-revision are logged at startup and reported per cluster in `status.images`.
+revision are logged at startup. Per-cluster `status.images` reports the
+complete effective set and whether it comes from explicit pins, defaults, or
+a mixture; default revisions are reported only when defaults participate.
 
 | Variable | Overrides the default image for |
 | :--- | :--- |
