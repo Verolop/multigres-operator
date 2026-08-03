@@ -112,7 +112,9 @@ jobs:
             echo "operator_ref=$operator_ref"
             echo "multigres_image=ghcr.io/multigres/multigres:sha-$short_sha"
             echo "pgctld_image=ghcr.io/multigres/pgctld:sha-$short_sha"
-            echo "multiadmin_web_image=ghcr.io/multigres/multiadmin-web:sha-$short_sha"
+            # multiadmin-web has no per-commit images. Pin the exact image from
+            # the original issue #557 failure so it is constant across the bisect.
+            echo "multiadmin_web_image=ghcr.io/multigres/multiadmin-web:nightly-sha-300f673c63ee2de84949cee59c1dfdc73b7776d3"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate and gate upstream SHA
