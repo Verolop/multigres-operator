@@ -110,9 +110,9 @@ jobs:
             echo "sha=$sha"
             echo "short_sha=$short_sha"
             echo "operator_ref=$operator_ref"
-            echo "multigres_image=ghcr.io/multigres/multigres:nightly-sha-$sha"
-            echo "pgctld_image=ghcr.io/multigres/pgctld:nightly-sha-$sha"
-            echo "multiadmin_web_image=ghcr.io/multigres/multiadmin-web:nightly-sha-$sha"
+            echo "multigres_image=ghcr.io/multigres/multigres:sha-$short_sha"
+            echo "pgctld_image=ghcr.io/multigres/pgctld:sha-$short_sha"
+            echo "multiadmin_web_image=ghcr.io/multigres/multiadmin-web:sha-$short_sha"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate and gate upstream SHA
@@ -208,6 +208,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify nightly image provenance
+        if: github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
@@ -258,6 +259,7 @@ jobs:
     uses: ./.github/workflows/_reusable-e2e.yaml
     with:
       ref: ${{ needs.resolve.outputs.operator-ref }}
+      test-spec: templated
       timeout-minutes: 30
       postgres-image: ${{ needs.preflight.outputs.pgctld-image }}
       multiadmin-image: ${{ needs.preflight.outputs.multigres-image }}
@@ -279,6 +281,7 @@ jobs:
       issues: write # Create or update the compatibility tracking issue.
     steps:
       - name: Update tracking issue
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           RESOLVE_RESULT: ${{ needs.resolve.result }}

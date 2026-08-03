@@ -241,6 +241,7 @@ jobs:
       - name: Run e2e tests
         env:
           E2E_KEEP_CLUSTERS: never
+          E2E_KEEP_NAMESPACES: always
           E2E_POSTGRES_IMAGE: ${{ inputs.postgres-image }}
           E2E_MULTIADMIN_IMAGE: ${{ inputs.multiadmin-image }}
           E2E_MULTIADMIN_WEB_IMAGE: ${{ inputs.multiadmin-web-image }}
@@ -266,16 +267,16 @@ jobs:
           go test -tags=e2e "${packages[@]}" -v -count=1 \
             "-timeout=${TIMEOUT_MINUTES}m"
 
-      - name: Collect Kind logs on failure
-        if: failure()
+      - name: Collect Kind logs
+        if: always()
         run: |
           for cluster in $(kind get clusters 2>/dev/null); do
             echo "=== Logs for cluster: $cluster ==="
             kind export logs "/tmp/kind-logs-$cluster" --name "$cluster" 2>/dev/null || true
           done
 
-      - name: Upload Kind logs on failure
-        if: failure()
+      - name: Upload Kind logs
+        if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kind-logs-${{ inputs.test-spec || 'all' }}

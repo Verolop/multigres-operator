@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -55,6 +56,12 @@ func (c *Cluster) CreateNamespace(t testing.TB) string {
 		t.Fatalf("create postgres password secret: %v", err)
 	}
 	t.Cleanup(func() {
+		keep := os.Getenv("E2E_KEEP_NAMESPACES")
+		if strings.EqualFold(keep, "always") ||
+			(strings.EqualFold(keep, "on-failure") && t.Failed()) {
+			t.Logf("preserving namespace %s for debugging", ns)
+			return
+		}
 		_ = c.Clientset.CoreV1().Namespaces().Delete(
 			context.Background(), ns, metav1.DeleteOptions{})
 	})
