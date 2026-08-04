@@ -60,14 +60,14 @@ To ensure generated resource names stay within Kubernetes limits even after addi
 
 | Field | MaxLength | Rationale |
 |:---|:---:|:---|
-| **Cluster Name** | 30 | Root of all names; must leave room for 5-6 more levels |
+| **Cluster Name** | 25 | Root of all names; must leave room for 5-6 more levels |
 | **Database Name** | 30 | Typically short; allows deep nesting |
 | **TableGroup Name** | 25 | Reduces risk of truncation in shard/pool names |
 | **Shard Name** | 25 | Often simple (e.g., `0-inf`, `shard1`) |
 | **Pool Name** | 25 | Conservative to prevent pod name truncation |
 | **Cell Name** | 30 | Typically az names (e.g., `us-east-1a`, `z1`) |
 
-These limits are enforced via **CRD validation** (`+kubebuilder:validation:MaxLength=X`) in `api/v1alpha1/common_types.go`.
+These limits are enforced via **CRD validation** markers in the API type definitions under `api/v1alpha1/`.
 
 ## Resources Without Hashes (No Collision Risk)
 
@@ -80,7 +80,7 @@ Some resources use **simple string concatenation** without hashes:
 
 **Why no hash?**
 1. **1:1 Relationship:** Each cluster has exactly one GlobalTopoServer and one MultiAdmin.
-2. **Predictable and Short:** The cluster name is already validated to be ≤30 chars, and we only append a fixed suffix.
+2. **Predictable and Short:** The cluster name is already validated to be ≤25 chars, and we only append a fixed suffix.
 3. **No User-Defined Nesting:** Unlike cells/shards/pools where users can define arbitrary names, these components are static.
 4. **No Collision Possible:** Since there's only ever one instance per cluster, there's no scenario where two different logical paths could produce the same name after truncation.
 

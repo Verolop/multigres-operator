@@ -55,6 +55,9 @@ func (c *Cluster) CreateNamespace(t testing.TB) string {
 		t.Fatalf("create postgres password secret: %v", err)
 	}
 	t.Cleanup(func() {
+		if t.Failed() {
+			c.dumpNamespaceDiagnostics(t, ns)
+		}
 		_ = c.Clientset.CoreV1().Namespaces().Delete(
 			context.Background(), ns, metav1.DeleteOptions{})
 	})
