@@ -317,21 +317,84 @@ test-coverage: manifests generate fmt vet setup-envtest ## Generate coverage rep
 E2E_TEST_SPEC ?=
 E2E_PACKAGES_SHARED = $(if $(E2E_TEST_SPEC),$(foreach t,$(subst $(comma),$(space),$(E2E_TEST_SPEC)),./test/e2e/shared/$(t)/),./test/e2e/shared/...)
 E2E_PACKAGES_DEDICATED = $(if $(E2E_TEST_SPEC),$(foreach t,$(subst $(comma),$(space),$(E2E_TEST_SPEC)),./test/e2e/dedicated/$(t)/),./test/e2e/dedicated/...)
+E2E_PACKAGE_FILE ?=
+E2E_TIMEOUT ?= 20m
 comma := ,
 space := $(empty) $(empty)
 
+.PHONY: run-e2e-shared
+run-e2e-shared:
+	@packages=(); \
+	if [ -n "$(E2E_PACKAGE_FILE)" ]; then \
+		while IFS= read -r package; do packages+=("$$package"); done < "$(E2E_PACKAGE_FILE)"; \
+	else \
+		while IFS= read -r package; do packages+=("$$package"); done < <( \
+			go list -tags=e2e $(E2E_PACKAGES_SHARED) \
+		); \
+	fi; \
+	[ "$${#packages[@]}" -gt 0 ] || { echo "No shared E2E packages selected"; exit 1; }; \
+	export OPERATOR_IMG="$${OPERATOR_IMG:-$(IMG)}"; \
+	export REPO_ROOT="$${REPO_ROOT:-$(shell pwd)}"; \
+	run_e2e() { \
+		local package_parallelism="$$1"; \
+		shift; \
+		go test -tags=e2e -p "$$package_parallelism" "$$@" \
+			-v -count=1 "-timeout=$(E2E_TIMEOUT)"; \
+	}; \
+	wait_for_shared_namespaces() { \
+		if ! kind get clusters | grep -Fxq e2e-shared; then return 0; fi; \
+		local kubeconfig; \
+		kubeconfig="$$(mktemp "$${TMPDIR:-/tmp}/e2e-shared-kubeconfig.XXXXXX")"; \
+		if ! kind get kubeconfig --name e2e-shared > "$$kubeconfig"; then \
+			rm -f "$$kubeconfig"; \
+			return 1; \
+		fi; \
+		local deadline=$$((SECONDS + 180)); \
+		local namespaces=(); \
+		while true; do \
+			namespaces=(); \
+			while IFS= read -r namespace; do namespaces+=("$$namespace"); done < <( \
+				kubectl --kubeconfig "$$kubeconfig" get namespaces -o name | \
+					sed -n '/^namespace\/e2e-ns-/p' \
+			); \
+			if [ "$${#namespaces[@]}" -eq 0 ]; then \
+				rm -f "$$kubeconfig"; \
+				return 0; \
+			fi; \
+			if [ "$$SECONDS" -ge "$$deadline" ]; then \
+				echo "Timed out waiting for prior E2E namespaces to terminate: $${namespaces[*]}"; \
+				kubectl --kubeconfig "$$kubeconfig" get "$${namespaces[@]}" || true; \
+				rm -f "$$kubeconfig"; \
+				return 1; \
+			fi; \
+			sleep 2; \
+		done; \
+	}; \
+	templated_package="$$(go list -tags=e2e ./test/e2e/shared/templated/)"; \
+	regular_packages=(); \
+	run_templated=false; \
+	for package in "$${packages[@]}"; do \
+		if [ "$$package" = "$$templated_package" ]; then \
+			run_templated=true; \
+		else \
+			regular_packages+=("$$package"); \
+		fi; \
+	done; \
+	if [ "$${#regular_packages[@]}" -gt 0 ]; then \
+		run_e2e 3 "$${regular_packages[@]}"; \
+	fi; \
+	if [ "$$run_templated" = true ]; then \
+		if [ "$${#regular_packages[@]}" -gt 0 ]; then wait_for_shared_namespaces; fi; \
+		run_e2e 1 "$$templated_package"; \
+	fi
+
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet container ## Run e2e tests (shared cluster, fast)
-	OPERATOR_IMG=$(IMG) \
-	REPO_ROOT=$(shell pwd) \
-	go test -tags=e2e $(E2E_PACKAGES_SHARED) -p 3 -v -count=1 -timeout=20m
+	$(MAKE) run-e2e-shared
 
 .PHONY: test-e2e-keep
 test-e2e-keep: manifests generate fmt vet container ## Run e2e tests; keep cluster on failure
-	OPERATOR_IMG=$(IMG) \
-	REPO_ROOT=$(shell pwd) \
-	E2E_KEEP_CLUSTERS=on-failure \
-	go test -tags=e2e $(E2E_PACKAGES_SHARED) -p 3 -v -count=1 -timeout=20m
+	E2E_KEEP_CLUSTERS=on-failure $(MAKE) run-e2e-shared
 
 .PHONY: test-e2e-full
 test-e2e-full: manifests generate fmt vet container ## Run e2e tests (dedicated cluster per test, full isolation)

@@ -103,7 +103,7 @@ func TestClusterDeletionAfterSwitchingToExternalTopo(t *testing.T) {
 	ctx := context.Background()
 
 	cr := framework.MustLoadCluster("config/samples/minimal.yaml", ns)
-	cr.Name = "delete-after-external-topo"
+	cr.Name = "delete-external-topo"
 	cr.Spec.PVCDeletionPolicy = &multigresv1alpha1.PVCDeletionPolicy{
 		WhenDeleted: multigresv1alpha1.RetainPVCRetentionPolicy,
 		WhenScaled:  multigresv1alpha1.RetainPVCRetentionPolicy,
