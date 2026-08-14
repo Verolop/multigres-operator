@@ -17,3 +17,16 @@ managed shared service. Branch controllers run with `--webhook-enable=false`.
 Each installation creates a uniquely named read-only ClusterRole and
 ClusterRoleBinding for Node and StorageClass discovery. All writes are granted
 through Roles confined to the developer namespace.
+
+## Migration order
+
+Do not run a cluster-wide controller and a namespaced controller over the same
+Multigres resources. For a zero-collision cutover:
+
+1. Render and apply the developer installation with its Deployment scaled to zero.
+2. Scale the old cluster-wide controller to zero during a coordinated handoff.
+3. Scale each developer controller to one and verify leader election and RBAC.
+4. Create new Multigres clusters only after the cluster-wide controller is stopped.
+
+Existing database pods continue serving during this controller handoff; only
+reconciliation pauses between steps 2 and 3.
