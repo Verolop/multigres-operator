@@ -1,0 +1,21 @@
+# One independently versioned controller per namespace. CRDs and admission
+# webhooks are intentionally managed separately because they are cluster-scoped.
+resources:
+- ../rbac-namespaced
+- ../manager
+
+patches:
+- target:
+    kind: Deployment
+    name: controller-manager
+  patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --webhook-enable=false
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: WATCH_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace

@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: manager-role
+  namespace: system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "persistentvolumeclaims", "pods", "secrets", "services"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["multigres.com"]
+  resources: ["cells", "multigresclusters", "shards", "tablegroups", "toposervers"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["multigres.com"]
+  resources: ["cells/finalizers", "multigresclusters/finalizers", "shards/finalizers", "toposervers/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["multigres.com"]
+  resources: ["cells/status", "multigresclusters/status", "shards/status", "tablegroups/status", "toposervers/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["multigres.com"]
+  resources: ["celltemplates", "coretemplates", "shardtemplates"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["policy"]
+  resources: ["poddisruptionbudgets"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]

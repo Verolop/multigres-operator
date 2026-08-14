@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -35,15 +36,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/selection"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -58,7 +54,6 @@ import (
 	cellcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/cell"
 	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
 	toposervercontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/toposerver"
-	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	multigreswebhook "github.com/multigres/multigres-operator/pkg/webhook"
 
 	gencert "github.com/multigres/multigres-operator/pkg/cert"
@@ -87,6 +82,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var watchNamespace string
 	var tlsOpts []func(*tls.Config)
 
 	// Webhook Flags
@@ -146,6 +142,12 @@ func main() {
 		false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers",
 	)
+	flag.StringVar(
+		&watchNamespace,
+		"watch-namespace",
+		os.Getenv("WATCH_NAMESPACE"),
+		"Restrict all namespaced watches and reconciliation to this namespace. Empty watches all namespaces.",
+	)
 
 	// Webhook Flag Configuration
 	flag.IntVar(&webhookPort, "webhook-port", 9443, " The port that the webhook server serves at.")
@@ -174,12 +176,23 @@ func main() {
 		"multigres-operator-webhook-service",
 		"Name of the Kubernetes Service for the webhook",
 	)
-
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if watchNamespace != "" && watchNamespace != defaultNS {
+		setupLog.Error(
+			fmt.Errorf(
+				"watch namespace %q differs from operator namespace %q",
+				watchNamespace,
+				defaultNS,
+			),
+			"invalid namespace-scoped configuration: deploy the operator in the namespace it watches",
+		)
+		os.Exit(1)
+	}
 
 	// Initialize distributed tracing (noop if OTEL_EXPORTER_OTLP_ENDPOINT is unset).
 	shutdownTracing, err := monitoring.InitTracing(
@@ -272,22 +285,6 @@ func main() {
 	//    generally lower volume than Secrets, the trade-off favors Usability here.
 	// -------------------------------------------------------------------------
 
-	// 1. Create the Label Selector for "app.kubernetes.io/managed-by = multigres-operator"
-	labelReq, _ := labels.NewRequirement(
-		metadata.LabelAppManagedBy,
-		selection.Equals,
-		[]string{metadata.ManagedByMultigres},
-	)
-	selector := labels.NewSelector().Add(*labelReq)
-
-	// 2. Define Cache Configs
-	// Global Config: Strictly filter by label to prevent OOM
-	filteredConfig := cache.Config{
-		LabelSelector: selector,
-	}
-	// Local Config: Cache everything (for Cert-Manager / Leader Election)
-	unfilteredConfig := cache.Config{}
-
 	// Adjust the client config to prevent throttling with high concurrency
 	config := ctrl.GetConfigOrDie()
 	config.QPS = 50
@@ -302,48 +299,7 @@ func main() {
 		// RELEASE LEADER ON CANCEL: Enables faster failover during rolling upgrades
 		LeaderElectionReleaseOnCancel: true,
 
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				// -----------------------------------------------------------
-				// SECRETS: The "Memory Bomb" Fix
-				// -----------------------------------------------------------
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						// Rule 1: In the Operator's Namespace, watch EVERYTHING (Cert-Manager, etc.)
-						defaultNS: unfilteredConfig,
-						// Rule 2: In ALL OTHER namespaces, ONLY watch labeled secrets
-						cache.AllNamespaces: filteredConfig,
-					},
-				},
-				// -----------------------------------------------------------
-				// STATEFULSETS, SERVICES, PODS: High Volume Resources
-				// -----------------------------------------------------------
-				&appsv1.StatefulSet{}: {
-					Namespaces: map[string]cache.Config{
-						defaultNS:           unfilteredConfig,
-						cache.AllNamespaces: filteredConfig,
-					},
-				},
-				&corev1.Service{}: {
-					Namespaces: map[string]cache.Config{
-						defaultNS:           unfilteredConfig,
-						cache.AllNamespaces: filteredConfig,
-					},
-				},
-				&corev1.Pod{}: {
-					Namespaces: map[string]cache.Config{
-						defaultNS:           unfilteredConfig,
-						cache.AllNamespaces: filteredConfig,
-					},
-				},
-				// -----------------------------------------------------------
-				// CONFIGMAPS: Left Unfiltered
-				// -----------------------------------------------------------
-				// We deliberately do NOT list ConfigMaps here. They fall back to
-				// global defaults (Unfiltered in All Namespaces). This allows
-				// the operator to read/hash user-provided ConfigMaps without labels.
-			},
-		},
+		Cache: operatorCacheOptions(defaultNS, watchNamespace),
 		WebhookServer: ctrlwebhook.NewServer(ctrlwebhook.Options{
 			Port:    webhookPort,
 			CertDir: webhookCertDir,

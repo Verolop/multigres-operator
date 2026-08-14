@@ -39,7 +39,7 @@ RUN CGO_ENABLED=0 \
 	-X main.buildDate=${BUILD_DATE}" \
 	-trimpath -mod=readonly \
 	-a -o manager \
-	cmd/multigres-operator/main.go
+	./cmd/multigres-operator
 
 RUN CGO_ENABLED=0 \
 	GOOS=${TARGETOS:-linux} \
