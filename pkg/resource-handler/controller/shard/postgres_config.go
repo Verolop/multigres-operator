@@ -2,8 +2,6 @@ package shard
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -18,13 +16,24 @@ import (
 )
 
 // renderedConfig bundles the once-per-reconcile render result so the status path
-// (drift detection via the hash) and the ConfigMap-delivery path
+// (drift detection via the hashes) and the ConfigMap-delivery path
 // (reconcilePostgresConfig) share a single value instead of threading the
-// content, hash, and error positionally through every signature.
+// content, hashes, and error positionally through every signature.
+//
+// restartHash covers the postmaster/internal settings, stamped on
+// AnnotationPostgresConfigHash and folded into the pod spec-hash; reloadHash is
+// the reload-safe subset stamped on AnnotationPostgresReloadHash and applied via
+// a reload instead of pod recreation.
 type renderedConfig struct {
-	content string
-	hash    string
-	err     error
+	content     string
+	restartHash string
+	reloadHash  string
+	// reloadSettings is the effective reload-safe name->value map (values
+	// unquoted to match pg_file_settings), passed to the multipooler ReloadConfig
+	// RPC as expected_settings so it reloads only against a file that already
+	// carries them.
+	reloadSettings map[string]string
+	err            error
 }
 
 // renderEffectiveConfig renders the shard's effective postgresql.conf once per
@@ -44,8 +53,14 @@ func (r *ShardReconciler) renderEffectiveConfig(
 		}
 		refContent = content
 	}
-	rendered, hash, err := renderPostgresConfig(shard, refContent)
-	return renderedConfig{content: rendered, hash: hash, err: err}
+	rendered, split, err := renderPostgresConfig(shard, refContent)
+	return renderedConfig{
+		content:        rendered,
+		restartHash:    split.RestartHash,
+		reloadHash:     split.ReloadHash,
+		reloadSettings: split.ReloadSettings,
+		err:            err,
+	}
 }
 
 // reconcilePostgresConfig delivers the shard's effective postgresql.conf into
@@ -72,22 +87,24 @@ func (r *ShardReconciler) reconcilePostgresConfig(
 	if shard.Annotations == nil {
 		shard.Annotations = make(map[string]string)
 	}
-	shard.Annotations[metadata.AnnotationPostgresConfigHash] = cfg.hash
+	shard.Annotations[metadata.AnnotationPostgresConfigHash] = cfg.restartHash
+	shard.Annotations[metadata.AnnotationPostgresReloadHash] = cfg.reloadHash
 	return nil
 }
 
 // renderPostgresConfig renders the effective postgresql.conf for a shard and
-// returns it together with the content hash stamped on
-// AnnotationPostgresConfigHash. It applies resource-derived sizing computed from
-// the shard's pool resources (see reduceShardResources), and layers the shard's
-// inline spec.postgresConfig map on top. refContent is the legacy
-// PostgresConfigRef body (empty when unset). It is re-exported to black-box tests
-// as RenderPostgresConfig via export_test.go so they can reproduce the hash the
-// controller stamps.
+// returns it together with its split content hashes: the restart-hash stamped on
+// AnnotationPostgresConfigHash (and folded into the pod spec-hash) and the
+// reload-hash stamped on AnnotationPostgresReloadHash. It applies
+// resource-derived sizing computed from the shard's pool resources (see
+// reduceShardResources), and layers the shard's inline spec.postgresConfig map
+// on top. refContent is the legacy PostgresConfigRef body (empty when unset). It
+// is re-exported to black-box tests as RenderPostgresConfig via export_test.go so
+// they can reproduce the hashes the controller stamps.
 func renderPostgresConfig(
 	shard *multigresv1alpha1.Shard,
 	refContent string,
-) (rendered, hash string, err error) {
+) (rendered string, split postgresconfig.ConfigSplit, err error) {
 	cfg := postgresconfig.Defaults()
 	cfg.ClusterName = shardClusterName(shard)
 	memBytes, cpuMillicores, diskBytes := reduceShardResources(shard)
@@ -97,15 +114,18 @@ func renderPostgresConfig(
 		cpuMillicores,
 		diskBytes,
 	); err != nil {
-		return "", "", err
+		return "", postgresconfig.ConfigSplit{}, err
 	}
 
 	rendered, err = postgresconfig.Render(cfg, refContent, shard.Spec.PostgresConfig)
 	if err != nil {
-		return "", "", err
+		return "", postgresconfig.ConfigSplit{}, err
 	}
-	sum := sha256.Sum256([]byte(rendered))
-	return rendered, hex.EncodeToString(sum[:]), nil
+	// StampAndSplit also stamps the config-version marker into the returned config
+	// and reload settings, so a reload-only change (including a removal) is
+	// verifiable against the kubelet-synced ConfigMap.
+	rendered, split = postgresconfig.StampAndSplit(rendered)
+	return rendered, split, nil
 }
 
 // shardClusterName builds the postgresql.conf cluster_name for a shard: a
