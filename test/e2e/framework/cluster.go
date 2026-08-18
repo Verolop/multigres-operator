@@ -80,21 +80,63 @@ func (c *Cluster) CRClient() (client.Client, error) {
 	return client.New(c.RestCfg, client.Options{Scheme: scheme})
 }
 
-// LoadImages loads locally tagged container images into a Kind cluster in a
-// single `kind load docker-image` call. Digest-pinned images are pulled by
-// Kubernetes instead: Kind's Docker archive import does not preserve a usable
-// name for digest-only references.
+// LoadImages loads locally tagged container images into every Kind node.
 func LoadImages(ctx context.Context, clusterName string, images []string) error {
 	images = kindLoadableImages(images)
 	if len(images) == 0 {
 		return nil
 	}
+	nodes, err := kindNodes(ctx, clusterName)
+	if err != nil {
+		return err
+	}
 	logf("loading %d locally tagged images into %s...", len(images), clusterName)
-	args := append([]string{"load", "docker-image", "--name", clusterName}, images...)
-	cmd := exec.CommandContext(ctx, "kind", args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	for _, image := range images {
+		for _, node := range nodes {
+			if err := importImage(ctx, node, image); err != nil {
+				return fmt.Errorf("load image %q into node %q: %w", image, node, err)
+			}
+		}
+	}
+	return nil
+}
+
+func kindNodes(ctx context.Context, clusterName string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "kind", "get", "nodes", "--name", clusterName)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("get nodes for Kind cluster %q: %w", clusterName, err)
+	}
+	nodes := strings.Fields(string(out))
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("Kind cluster %q has no nodes", clusterName)
+	}
+	return nodes, nil
+}
+
+func importImage(ctx context.Context, node, image string) error {
+	save := exec.CommandContext(ctx, "docker", "save", image)
+	ctrImport := exec.CommandContext(ctx, "docker", "exec", "-i", node,
+		"ctr", "--namespace=k8s.io", "images", "import", "-")
+
+	archive, err := save.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	ctrImport.Stdin = archive
+	ctrImport.Stdout = os.Stderr
+	ctrImport.Stderr = os.Stderr
+	if err := ctrImport.Start(); err != nil {
+		return err
+	}
+	if err := save.Run(); err != nil {
+		_ = ctrImport.Wait()
+		return fmt.Errorf("save Docker image: %w", err)
+	}
+	if err := ctrImport.Wait(); err != nil {
+		return fmt.Errorf("import image into containerd: %w", err)
+	}
+	return nil
 }
 
 func kindLoadableImages(images []string) []string {
@@ -154,7 +196,7 @@ func setupCluster(name string) (*Cluster, error) {
 		return nil, fmt.Errorf("label kind nodes: %w", err)
 	}
 
-	// Load images (batch — single CLI call, idempotent).
+	// Load images directly into each Kind node; idempotent.
 	preset := testutil.DefaultOperatorPreset()
 	imgs := append([]string{preset.Image}, runtimeImages()...)
 	if err := LoadImages(ctx, name, imgs); err != nil {
@@ -174,10 +216,14 @@ func deployOperator(kubecfg, image, namespace, deploymentName string) error {
 	if err != nil {
 		return err
 	}
+	kustomize, err := kustomizeBinary(repoRoot)
+	if err != nil {
+		return err
+	}
 
 	// 1. Install CRDs.
 	logf("installing CRDs...")
-	if err := kustomizePipe(kubecfg, filepath.Join(repoRoot, "config", "crd")); err != nil {
+	if err := kustomizePipe(kustomize, kubecfg, filepath.Join(repoRoot, "config", "crd")); err != nil {
 		return fmt.Errorf("install CRDs: %w", err)
 	}
 
@@ -193,14 +239,14 @@ func deployOperator(kubecfg, image, namespace, deploymentName string) error {
 		return fmt.Errorf("copy config: %w\n%s", err, out)
 	}
 
-	setImg := exec.Command("kustomize", "edit", "set", "image", fmt.Sprintf("controller=%s", image))
+	setImg := exec.Command(kustomize, "edit", "set", "image", fmt.Sprintf("controller=%s", image))
 	setImg.Dir = filepath.Join(tmpDir, "config", "manager")
 	if out, err := setImg.CombinedOutput(); err != nil {
 		return fmt.Errorf("kustomize edit set image: %w\n%s", err, out)
 	}
 
 	logf("deploying operator (image=%s)...", image)
-	if err := kustomizePipe(kubecfg, filepath.Join(tmpDir, "config", "no-webhook")); err != nil {
+	if err := kustomizePipe(kustomize, kubecfg, filepath.Join(tmpDir, "config", "no-webhook")); err != nil {
 		return fmt.Errorf("apply operator: %w", err)
 	}
 
@@ -217,8 +263,20 @@ func deployOperator(kubecfg, image, namespace, deploymentName string) error {
 	return nil
 }
 
-func kustomizePipe(kubecfg, dir string) error {
-	kBuild := exec.Command("kustomize", "build", dir)
+func kustomizeBinary(repoRoot string) (string, error) {
+	local := filepath.Join(repoRoot, "bin", "kustomize")
+	if info, err := os.Stat(local); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return local, nil
+	}
+	path, err := exec.LookPath("kustomize")
+	if err != nil {
+		return "", fmt.Errorf("find kustomize: install it with make kustomize: %w", err)
+	}
+	return path, nil
+}
+
+func kustomizePipe(kustomize, kubecfg, dir string) error {
+	kBuild := exec.Command(kustomize, "build", dir)
 	kApply := exec.Command("kubectl", "--kubeconfig", kubecfg, "apply", "--server-side", "-f", "-")
 	pipe, err := kBuild.StdoutPipe()
 	if err != nil {

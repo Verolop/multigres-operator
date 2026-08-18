@@ -54,9 +54,7 @@ func clearDrainAnnotations(ctx context.Context, k8sClient client.Client, pod *co
 	return nil
 }
 
-// initiateDrain sets the drain-requested annotation on a pod via merge patch,
-// starting the drain state machine: the reconciler removes the pod from the
-// sync standby list, unregisters it from etcd, then marks it ready-for-deletion.
+// initiateDrain sets the drain-requested annotation on a pod via merge patch.
 func (r *ShardReconciler) initiateDrain(ctx context.Context, pod *corev1.Pod) error {
 	patch := client.MergeFrom(pod.DeepCopy())
 	if pod.Annotations == nil {
