@@ -26,8 +26,16 @@ func TestExecuteDrainStateMachine(t *testing.T) {
 		want string
 	}{
 		{name: "requested", from: metadata.DrainStateRequested, want: metadata.DrainStateDraining},
-		{name: "draining", from: metadata.DrainStateDraining, want: metadata.DrainStateAcknowledged},
-		{name: "acknowledged", from: metadata.DrainStateAcknowledged, want: metadata.DrainStateReadyForDeletion},
+		{
+			name: "draining",
+			from: metadata.DrainStateDraining,
+			want: metadata.DrainStateAcknowledged,
+		},
+		{
+			name: "acknowledged",
+			from: metadata.DrainStateAcknowledged,
+			want: metadata.DrainStateReadyForDeletion,
+		},
 	}
 
 	for _, tt := range tests {
@@ -46,7 +54,11 @@ func TestExecuteDrainStateMachine(t *testing.T) {
 			}
 
 			updated := &corev1.Pod{}
-			if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(pod), updated); err != nil {
+			if err := k8sClient.Get(
+				context.Background(),
+				client.ObjectKeyFromObject(pod),
+				updated,
+			); err != nil {
 				t.Fatalf("get updated pod: %v", err)
 			}
 			if got := updated.Annotations[metadata.AnnotationDrainState]; got != tt.want {
@@ -58,7 +70,9 @@ func TestExecuteDrainStateMachine(t *testing.T) {
 
 func TestExecuteDrainStateMachineTimeout(t *testing.T) {
 	shard, pod, k8sClient := testObjects(t, metadata.DrainStateDraining)
-	pod.Annotations[metadata.AnnotationDrainRequestedAt] = time.Now().Add(-drain.DrainTimeout - time.Second).Format(time.RFC3339)
+	pod.Annotations[metadata.AnnotationDrainRequestedAt] = time.Now().
+		Add(-drain.DrainTimeout - time.Second).
+		Format(time.RFC3339)
 	if err := k8sClient.Update(context.Background(), pod); err != nil {
 		t.Fatalf("update pod: %v", err)
 	}
@@ -72,7 +86,11 @@ func TestExecuteDrainStateMachineTimeout(t *testing.T) {
 	}
 
 	updated := &corev1.Pod{}
-	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(pod), updated); err != nil {
+	if err := k8sClient.Get(
+		context.Background(),
+		client.ObjectKeyFromObject(pod),
+		updated,
+	); err != nil {
 		t.Fatalf("get updated pod: %v", err)
 	}
 	if got := updated.Annotations[metadata.AnnotationDrainState]; got != metadata.DrainStateReadyForDeletion {
@@ -84,7 +102,13 @@ func TestExecuteDrainStateMachineNoop(t *testing.T) {
 	for _, state := range []string{"", metadata.DrainStateReadyForDeletion} {
 		t.Run(state, func(t *testing.T) {
 			shard, pod, k8sClient := testObjects(t, state)
-			requeue, err := drain.ExecuteDrainStateMachine(context.Background(), k8sClient, nil, shard, pod)
+			requeue, err := drain.ExecuteDrainStateMachine(
+				context.Background(),
+				k8sClient,
+				nil,
+				shard,
+				pod,
+			)
 			if err != nil {
 				t.Fatalf("execute drain state machine: %v", err)
 			}
@@ -95,7 +119,10 @@ func TestExecuteDrainStateMachineNoop(t *testing.T) {
 	}
 }
 
-func testObjects(t testing.TB, state string) (*multigresv1alpha1.Shard, *corev1.Pod, client.Client) {
+func testObjects(
+	t testing.TB,
+	state string,
+) (*multigresv1alpha1.Shard, *corev1.Pod, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := multigresv1alpha1.AddToScheme(scheme); err != nil {

@@ -75,7 +75,13 @@ func ExecuteDrainStateMachine(
 	case metadata.DrainStateAcknowledged:
 		monitoring.IncrementDrainOperations(clusterName, shard.Name, "success")
 		if recorder != nil {
-			recorder.Eventf(shard, "Normal", "DrainCompleted", "Pod %s is ready for deletion", pod.Name)
+			recorder.Eventf(
+				shard,
+				"Normal",
+				"DrainCompleted",
+				"Pod %s is ready for deletion",
+				pod.Name,
+			)
 		}
 		return UpdateDrainState(ctx, k8sClient, pod, metadata.DrainStateReadyForDeletion)
 	}
