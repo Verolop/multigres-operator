@@ -321,12 +321,10 @@ func (r *ShardReconciler) handlePendingDeletion(
 
 		default:
 			// Drain in progress — run the drain state machine.
-			if store != nil {
-				if _, derr := drain.ExecuteDrainStateMachine(
-					ctx, r.Client, r.RPCClient, r.Recorder, store, shard, pod,
-				); derr != nil {
-					logger.Error(derr, "Failed to execute drain state machine", "pod", pod.Name)
-				}
+			if _, derr := drain.ExecuteDrainStateMachine(
+				ctx, r.Client, r.Recorder, shard, pod,
+			); derr != nil {
+				logger.Error(derr, "Failed to execute drain state machine", "pod", pod.Name)
 			}
 			allDrained = false
 		}

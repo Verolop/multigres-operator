@@ -652,119 +652,18 @@ func TestMarkDeadPoolers(t *testing.T) {
 	})
 }
 
-func TestForceUnregisterPod(t *testing.T) {
-	t.Parallel()
-
-	t.Run("returns nil for empty cell label", func(t *testing.T) {
-		t.Parallel()
-		shard := &multigresv1alpha1.Shard{}
-		_, factory := memorytopo.NewServerAndFactory(t.Context(), "cell1")
-		store := topoclient.NewWithFactory(
-			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
-		)
-		defer func() { _ = store.Close() }()
-
-		err := topo.ForceUnregisterPod(t.Context(), store, shard, "pod", "")
-		if err != nil {
-			t.Errorf("expected nil error, got %v", err)
-		}
-	})
-
-	t.Run("skips unregistration when no matching pooler found", func(t *testing.T) {
-		t.Parallel()
-		_, factory := memorytopo.NewServerAndFactory(t.Context(), "cell1")
-		store := topoclient.NewWithFactory(
-			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
-		)
-		defer func() { _ = store.Close() }()
-
-		ctx := t.Context()
-		_ = store.RegisterMultipooler(ctx, &clustermetadata.Multipooler{
-			Id:           &clustermetadata.ID{Cell: "cell1", Name: "other-pod"},
-			Hostname:     "other-pod",
-			RoutingState: routingState(clustermetadata.RoutingRole_ROUTING_ROLE_REPLICA),
-			ShardKey:     &clustermetadata.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-		}, false)
-
-		shard := &multigresv1alpha1.Shard{
-			Spec: multigresv1alpha1.ShardSpec{
-				DatabaseName: "db", TableGroupName: "tg", ShardName: "0",
-			},
-		}
-
-		err := topo.ForceUnregisterPod(ctx, store, shard, "nonexistent-pod", "cell1")
-		if err != nil {
-			t.Errorf("expected nil error for missing pooler, got %v", err)
-		}
-
-		poolers, _ := store.GetMultipoolersByCell(ctx, "cell1", nil)
-		if len(poolers) != 1 {
-			t.Errorf("expected 1 pooler remaining, got %d", len(poolers))
-		}
-	})
-
-	t.Run("removes pooler that matches pod", func(t *testing.T) {
-		t.Parallel()
-		_, factory := memorytopo.NewServerAndFactory(t.Context(), "cell1")
-		store := topoclient.NewWithFactory(
-			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
-		)
-		defer func() { _ = store.Close() }()
-
-		ctx := t.Context()
-		_ = store.RegisterMultipooler(ctx, &clustermetadata.Multipooler{
-			Id:           &clustermetadata.ID{Cell: "cell1", Name: "my-pod"},
-			Hostname:     "my-pod",
-			RoutingState: routingState(clustermetadata.RoutingRole_ROUTING_ROLE_REPLICA),
-			ShardKey:     &clustermetadata.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-		}, false)
-
-		shard := &multigresv1alpha1.Shard{
-			Spec: multigresv1alpha1.ShardSpec{
-				DatabaseName: "db", TableGroupName: "tg", ShardName: "0",
-			},
-		}
-
-		err := topo.ForceUnregisterPod(ctx, store, shard, "my-pod", "cell1")
-		if err != nil {
-			t.Errorf("expected nil error for successful unregistration, got %v", err)
-		}
-
-		poolers, _ := store.GetMultipoolersByCell(ctx, "cell1", nil)
-		if len(poolers) != 0 {
-			t.Errorf("expected 0 poolers remaining, got %d", len(poolers))
-		}
-	})
-}
-
 // errorGetPoolersStore returns an error for GetMultipoolersByCell.
 type errorGetPoolersStore struct {
 	topoclient.Store
 }
 
 func (s *errorGetPoolersStore) GetMultipoolersByCell(
-	ctx context.Context, cell string, opts *topoclient.GetMultipoolersByCellOptions,
+	context.Context, string, *topoclient.GetMultipoolersByCellOptions,
 ) ([]*topoclient.MultipoolerInfo, error) {
 	return nil, errors.New("topo error")
 }
 
 func (s *errorGetPoolersStore) Close() error { return nil }
-
-func TestForceUnregisterPod_GetPoolersError(t *testing.T) {
-	t.Parallel()
-
-	shard := &multigresv1alpha1.Shard{
-		Spec: multigresv1alpha1.ShardSpec{
-			DatabaseName: "db", TableGroupName: "tg", ShardName: "0",
-		},
-	}
-
-	store := &errorGetPoolersStore{}
-	err := topo.ForceUnregisterPod(t.Context(), store, shard, "test-pod", "cell1")
-	if err == nil {
-		t.Error("expected error when GetMultipoolersByCell fails")
-	}
-}
 
 func TestCollectCells(t *testing.T) {
 	t.Parallel()

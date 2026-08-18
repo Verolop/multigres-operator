@@ -234,35 +234,6 @@ func PodMatchesPooler(podName string, p *topoclient.MultipoolerInfo) bool {
 	return h == podName || strings.HasPrefix(h, podName+".")
 }
 
-// ForceUnregisterPod unregisters a specific pod's pooler from the topology.
-func ForceUnregisterPod(
-	ctx context.Context,
-	store topoclient.Store,
-	shard *multigresv1alpha1.Shard,
-	podName string,
-	cellName string,
-) error {
-	if cellName == "" {
-		return nil
-	}
-
-	opt := ShardFilter(shard)
-	poolers, err := store.GetMultipoolersByCell(ctx, cellName, opt)
-	if err != nil {
-		return err
-	}
-
-	for _, p := range poolers {
-		if PodMatchesPooler(podName, p) {
-			return store.UnregisterMultipooler(ctx, p.Id)
-		}
-	}
-	log.FromContext(ctx).
-		Info("No matching pooler found in topology for pod, skipping unregistration",
-			"pod", podName, "cell", cellName)
-	return nil
-}
-
 // MarkDeadPoolers scans topology entries for poolers that have no corresponding
 // running pod and marks them LIFECYCLE_SHUTDOWN, the same lifecycle signal a
 // pooler writes for itself on graceful shutdown. The orchestrator's pooler

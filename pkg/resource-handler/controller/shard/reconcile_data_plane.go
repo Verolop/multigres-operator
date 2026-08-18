@@ -264,7 +264,7 @@ func (r *ShardReconciler) reconcileDrainState(
 		}
 
 		shouldRequeue, derr := drain.ExecuteDrainStateMachine(
-			ctx, r.Client, r.RPCClient, r.Recorder, store, shard, pod,
+			ctx, r.Client, r.Recorder, shard, pod,
 		)
 		if derr != nil {
 			logger.Error(derr, "Failed to execute drain state machine", "pod", pod.Name)
@@ -279,22 +279,18 @@ func (r *ShardReconciler) reconcileDrainState(
 
 // isDrainStale returns true when a pod's drain is no longer needed because the
 // desired state has changed (e.g. scale-down reversed or rolling-update reverted).
-// Only early drain states (Requested/Draining) are cancellable — once Acknowledged,
-// etcd unregistration may have started and the drain must complete.
+// Only the requested state is cancellable.
 func (r *ShardReconciler) isDrainStale(
 	shard *multigresv1alpha1.Shard,
 	pod *corev1.Pod,
 	state string,
 ) bool {
 	// Only cancel Requested — nothing has happened yet at this point.
-	// Draining means the standby removal RPC already succeeded and the pod
-	// has been removed from the sync standby list; cancelling there would
-	// leave an orphaned replica unless multiorch re-registers it.
 	if state != metadata.DrainStateRequested {
 		return false
 	}
 
-	// Pods being deleted need the drain to cleanly unregister from etcd.
+	// Pods being deleted need the drain to complete.
 	if !pod.DeletionTimestamp.IsZero() {
 		return false
 	}
