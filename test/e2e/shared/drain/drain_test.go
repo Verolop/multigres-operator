@@ -3,14 +3,22 @@
 package drain_test
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -97,6 +105,7 @@ func TestGracefulScaleDown(t *testing.T) {
 	cluster.WaitForAllPodsReady(t, ns)
 	shard := waitForHealthyShard(t, c, ns, cr.Name)
 	primary, _ := waitForPrimaryAndReplica(t, c, ns, cr.Name, shard)
+	poolPodsBeforeScaleDown := listPoolPods(t, c, ns, cr.Name)
 
 	t.Log("scaling the pool from three poolers to two")
 	if err := c.Get(ctx, client.ObjectKeyFromObject(cr), cr); err != nil {
@@ -116,6 +125,11 @@ func TestGracefulScaleDown(t *testing.T) {
 	if primaryAfterScaleDown.Name != primary.Name {
 		t.Fatalf("scale-down changed primary from %q to %q", primary.Name, primaryAfterScaleDown.Name)
 	}
+	removed := removedPoolPod(t, poolPodsBeforeScaleDown, listPoolPods(t, c, ns, cr.Name))
+	probe := newMultiadminProbe(t, c, ns, cr.Name, primaryAfterScaleDown)
+	t.Cleanup(func() { _ = c.Delete(context.Background(), probe) })
+	waitForPoolerShutdown(t, ns, probe.Name, removed)
+	waitForCohortRemoval(t, ns, probe.Name, removed)
 }
 
 func waitForHealthyShard(
@@ -249,6 +263,250 @@ func waitForPoolPodCount(t testing.TB, c client.Client, namespace, clusterName s
 	if err != nil {
 		t.Fatalf("timed out waiting for %d ready pool pods: %v", want, err)
 	}
+}
+
+func listPoolPods(t testing.TB, c client.Client, namespace, clusterName string) []*corev1.Pod {
+	t.Helper()
+	pods := &corev1.PodList{}
+	if err := c.List(
+		context.Background(),
+		pods,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			metadata.LabelMultigresCluster: clusterName,
+			metadata.LabelMultigresPool:    "default",
+		},
+	); err != nil {
+		t.Fatalf("list pool pods: %v", err)
+	}
+	result := make([]*corev1.Pod, 0, len(pods.Items))
+	for i := range pods.Items {
+		result = append(result, pods.Items[i].DeepCopy())
+	}
+	return result
+}
+
+func removedPoolPod(t testing.TB, before, after []*corev1.Pod) *corev1.Pod {
+	t.Helper()
+	present := make(map[string]struct{}, len(after))
+	for _, pod := range after {
+		present[pod.Name] = struct{}{}
+	}
+
+	var removed []*corev1.Pod
+	for _, pod := range before {
+		if _, ok := present[pod.Name]; !ok {
+			removed = append(removed, pod)
+		}
+	}
+	if len(removed) != 1 {
+		t.Fatalf("removed pool pods = %d, want 1", len(removed))
+	}
+	return removed[0]
+}
+
+func waitForCohortRemoval(
+	t testing.TB,
+	namespace, probeName string,
+	removed *corev1.Pod,
+) {
+	t.Helper()
+	removedID := poolerServiceID(t, removed)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		status, err := cohortProbeStatus(ctx, namespace, probeName)
+		if err != nil {
+			return false, nil
+		}
+		members := status.GetConsensusStatus().GetCurrentPosition().GetPosition().GetDecision().GetCohortMembers()
+		if len(members) != 2 {
+			return false, nil
+		}
+		for _, member := range members {
+			if member.GetName() == removedID {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("cohort still contains removed pooler %q: %v", removedID, err)
+	}
+}
+
+func waitForPoolerShutdown(t testing.TB, namespace, probeName string, removed *corev1.Pod) {
+	t.Helper()
+	removedID := poolerServiceID(t, removed)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		poolers, err := poolersProbeStatus(ctx, namespace, probeName)
+		if err != nil {
+			return false, nil
+		}
+		for _, pooler := range poolers.GetPoolers() {
+			if pooler.GetId().GetName() == removedID {
+				return pooler.GetLifecycleStatus().GetStatus() == clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_SHUTDOWN, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("pooler %q did not reach LIFECYCLE_SHUTDOWN: %v", removedID, err)
+	}
+}
+
+func newMultiadminProbe(
+	t testing.TB,
+	c client.Client,
+	namespace, clusterName string,
+	primary *corev1.Pod,
+) *corev1.Pod {
+	t.Helper()
+	image := multiadminImage(t, c, namespace, clusterName)
+	cell := primary.Labels[metadata.LabelMultigresCell]
+	primaryID := poolerServiceID(t, primary)
+	body := fmt.Sprintf(`{"poolerId":{"cell":%q,"name":%q}}`, cell, primaryID)
+	host := clusterName + "-multiadmin"
+	script := fmt.Sprintf(`body='%s'
+request() {
+  local method=$1 path=$2 payload=$3
+  exec 3<>/dev/tcp/%s/18000 || return
+  if [ -n "$payload" ]; then
+    printf '%%s %%s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nConnect-Protocol-Version: 1\r\nContent-Length: %%s\r\n\r\n%%s' "$method" "$path" "${#payload}" "$payload" >&3
+  else
+    printf '%%s %%s HTTP/1.0\r\nHost: %s\r\n\r\n' "$method" "$path" >&3
+  fi
+  cat <&3
+  exec 3>&- 3<&-
+}
+while true; do
+  echo __POOLERS_PROBE__
+  request GET /api/v1/poolers ''
+  echo __END_POOLERS_PROBE__
+  echo __COHORT_PROBE__
+  request POST /multiadmin.MultiadminService/GetPoolerStatus "$body"
+  echo __END_COHORT_PROBE__
+  sleep 2
+done`, body, host, host, host)
+	probe := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "cohort-probe", Namespace: namespace},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:    "probe",
+				Image:   image,
+				Command: []string{"/bin/bash", "-c", script},
+			}},
+		},
+	}
+	if err := c.Create(context.Background(), probe); err != nil {
+		t.Fatalf("create cohort probe: %v", err)
+	}
+	return probe
+}
+
+func multiadminImage(t testing.TB, c client.Client, namespace, clusterName string) string {
+	t.Helper()
+	pods := &corev1.PodList{}
+	if err := c.List(
+		context.Background(),
+		pods,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			metadata.LabelAppComponent:     metadata.ComponentMultiadmin,
+			metadata.LabelMultigresCluster: clusterName,
+		},
+	); err != nil || len(pods.Items) != 1 || len(pods.Items[0].Spec.Containers) != 1 {
+		t.Fatalf("get multiadmin pod image: %v", err)
+	}
+	return pods.Items[0].Spec.Containers[0].Image
+}
+
+func poolerServiceID(t testing.TB, pod *corev1.Pod) string {
+	t.Helper()
+	for _, container := range pod.Spec.Containers {
+		for _, arg := range container.Args {
+			if serviceID, ok := strings.CutPrefix(arg, "--service-id="); ok {
+				return serviceID
+			}
+		}
+	}
+	t.Fatalf("pooler pod %q has no service ID", pod.Name)
+	return ""
+}
+
+func cohortProbeStatus(ctx context.Context, namespace, podName string) (*multiadminpb.GetPoolerStatusResponse, error) {
+	output, err := multiadminProbeOutput(ctx, namespace, podName)
+	if err != nil {
+		return nil, err
+	}
+	body, err := parseProbeResponse(output, "__COHORT_PROBE__", "__END_COHORT_PROBE__")
+	if err != nil {
+		return nil, err
+	}
+	status := &multiadminpb.GetPoolerStatusResponse{}
+	if err := protojson.Unmarshal(body, status); err != nil {
+		return nil, err
+	}
+	return status, nil
+}
+
+func poolersProbeStatus(ctx context.Context, namespace, podName string) (*multiadminpb.GetPoolersResponse, error) {
+	output, err := multiadminProbeOutput(ctx, namespace, podName)
+	if err != nil {
+		return nil, err
+	}
+	body, err := parseProbeResponse(output, "__POOLERS_PROBE__", "__END_POOLERS_PROBE__")
+	if err != nil {
+		return nil, err
+	}
+	poolers := &multiadminpb.GetPoolersResponse{}
+	if err := protojson.Unmarshal(body, poolers); err != nil {
+		return nil, err
+	}
+	return poolers, nil
+}
+
+func multiadminProbeOutput(ctx context.Context, namespace, podName string) (string, error) {
+	stream, err := cluster.Clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{}).Stream(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	output, err := io.ReadAll(stream)
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+func parseProbeResponse(output, startMarker, endMarker string) ([]byte, error) {
+	responses := strings.Split(output, endMarker)
+	for i := len(responses) - 1; i >= 0; i-- {
+		response := responses[i]
+		start := strings.LastIndex(response, startMarker)
+		if start == -1 {
+			continue
+		}
+		httpResponse, err := http.ReadResponse(
+			bufio.NewReader(strings.NewReader(strings.TrimSpace(response[start+len(startMarker):]))),
+			&http.Request{Method: http.MethodPost},
+		)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(httpResponse.Body)
+		_ = httpResponse.Body.Close()
+		if err != nil || httpResponse.StatusCode != http.StatusOK {
+			continue
+		}
+		return body, nil
+	}
+	return nil, fmt.Errorf("no valid %s response", startMarker)
 }
 
 func podReady(pod *corev1.Pod) bool {
