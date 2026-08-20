@@ -99,8 +99,8 @@ func BuildPoolDataPVC(
 	return pvc, nil
 }
 
-// BuildSharedBackupPVCName builds the deterministic name for the cell-level shared backup PVC.
-func BuildSharedBackupPVCName(shard *multigresv1alpha1.Shard, cellName string) string {
+// BuildSharedBackupPVCName builds the deterministic name for the shard-level shared backup PVC.
+func BuildSharedBackupPVCName(shard *multigresv1alpha1.Shard) string {
 	clusterName := shard.Labels["multigres.com/cluster"]
 	return nameutil.JoinWithConstraints(
 		nameutil.ServiceConstraints, // Using service constraints since PVC names follow similar rules
@@ -109,21 +109,19 @@ func BuildSharedBackupPVCName(shard *multigresv1alpha1.Shard, cellName string) s
 		string(shard.Spec.DatabaseName),
 		string(shard.Spec.TableGroupName),
 		string(shard.Spec.ShardName),
-		cellName,
 	)
 }
 
-// BuildSharedBackupPVC creates a ReadWriteMany PersistentVolumeClaim
-// shared by all pods in the cell.
+// BuildSharedBackupPVC creates a PersistentVolumeClaim
+// shared by all pooler pods in the shard.
 // When deleteOnShardRemoval is true, a controller ownerRef is set so that
 // Kubernetes GC cascade-deletes the PVC when the Shard is removed.
 func BuildSharedBackupPVC(
 	shard *multigresv1alpha1.Shard,
-	cellName string,
 	deleteOnShardRemoval bool,
 	scheme *runtime.Scheme,
 ) (*corev1.PersistentVolumeClaim, error) {
-	pvcName := BuildSharedBackupPVCName(shard, cellName)
+	pvcName := BuildSharedBackupPVCName(shard)
 
 	clusterName := shard.Labels["multigres.com/cluster"]
 	labels := metadata.BuildStandardLabels(clusterName, PoolComponentName)
@@ -131,7 +129,6 @@ func BuildSharedBackupPVC(
 	metadata.AddDatabaseLabel(labels, shard.Spec.DatabaseName)
 	metadata.AddTableGroupLabel(labels, shard.Spec.TableGroupName)
 	metadata.AddShardLabel(labels, shard.Spec.ShardName)
-	metadata.AddCellLabel(labels, multigresv1alpha1.CellName(cellName))
 
 	storageSize := "10Gi"
 	var pvcClass *string
