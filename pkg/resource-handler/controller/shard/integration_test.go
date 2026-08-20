@@ -956,7 +956,7 @@ func TestShardReconciliation(t *testing.T) {
 			tc.shard.Annotations[metadata.AnnotationPostgresReloadHash] = hashes.ReloadHash
 
 			// Append literal expected Pods and PVCs based on Shard Spec
-			backupCells := map[string]bool{}
+			backupPVCAdded := false
 			for poolName, poolSpec := range tc.shard.Spec.Pools {
 				for _, cellName := range poolSpec.Cells {
 					replicas := shardcontroller.DefaultPoolReplicas
@@ -977,14 +977,14 @@ func TestShardReconciliation(t *testing.T) {
 						filteredResources = append(filteredResources, pvc)
 					}
 
-					// Shared backup PVC is per-cell, not per-pod
-					if tc.shard.Spec.Backup != nil && tc.shard.Spec.Backup.Type == multigresv1alpha1.BackupTypeFilesystem && !backupCells[string(cellName)] {
-						backupPVC, err := shardcontroller.BuildSharedBackupPVC(tc.shard, string(cellName), shardcontroller.ShouldDeleteShardLevelPVCOnRemoval(tc.shard), mgr.GetScheme())
+					// Shared backup PVC is per-shard, not per-pod or per-cell.
+					if tc.shard.Spec.Backup != nil && tc.shard.Spec.Backup.Type == multigresv1alpha1.BackupTypeFilesystem && !backupPVCAdded {
+						backupPVC, err := shardcontroller.BuildSharedBackupPVC(tc.shard, shardcontroller.ShouldDeleteShardLevelPVCOnRemoval(tc.shard), mgr.GetScheme())
 						if err != nil {
 							t.Fatalf("Failed to build backup pvc: %v", err)
 						}
 						filteredResources = append(filteredResources, backupPVC)
-						backupCells[string(cellName)] = true
+						backupPVCAdded = true
 					}
 				}
 			}

@@ -1010,7 +1010,7 @@ func TestBuildSharedBackupVolume_S3(t *testing.T) {
 			},
 		},
 	}
-	vol := buildSharedBackupVolume(shard, "zone-1")
+	vol := buildSharedBackupVolume(shard)
 
 	if vol.Name != BackupVolumeName {
 		t.Errorf("volume name = %q, want %q", vol.Name, BackupVolumeName)
