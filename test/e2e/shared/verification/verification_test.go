@@ -5,11 +5,14 @@ package verification_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	"github.com/multigres/multigres-operator/test/e2e/framework"
 )
 
@@ -19,6 +22,109 @@ func TestResourceVerification(t *testing.T) {
 	t.Run("PDB", testPDB)
 	t.Run("MultiadminWeb", testMultiadminWeb)
 	t.Run("LogLevels", testLogLevels)
+	t.Run("MultiCellFilesystemBackup", testMultiCellFilesystemBackup)
+}
+
+func testMultiCellFilesystemBackup(t *testing.T) {
+	ns := cluster.CreateNamespace(t)
+	c, err := cluster.CRClient()
+	if err != nil {
+		t.Fatalf("create CR client: %v", err)
+	}
+
+	cr := framework.MustLoadCluster("test/e2e/fixtures/base.yaml", ns)
+	cr.Name = "multi-cell-filesystem-backup"
+	cr.Spec.Cells = append(cr.Spec.Cells, multigresv1alpha1.CellConfig{
+		Name:   "zone-b",
+		ZoneID: "us-central1-a",
+	})
+	cr.Spec.Backup = &multigresv1alpha1.BackupConfig{
+		Type: multigresv1alpha1.BackupTypeFilesystem,
+		Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+			Storage: multigresv1alpha1.StorageSpec{
+				Size:        "1Gi",
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			},
+		},
+	}
+	pool := cr.Spec.Databases[0].TableGroups[0].Shards[0].Spec.Pools["default"]
+	pool.Cells = []multigresv1alpha1.CellName{"zone-a", "zone-b"}
+	replicas := int32(1)
+	pool.ReplicasPerCell = &replicas
+	cr.Spec.Databases[0].TableGroups[0].Shards[0].Spec.Pools["default"] = pool
+
+	if err := c.Create(context.Background(), cr); err != nil {
+		t.Fatalf("create MultigresCluster: %v", err)
+	}
+	cluster.WaitForAllPodsReady(t, ns)
+
+	claims := &corev1.PersistentVolumeClaimList{}
+	if err := c.List(context.Background(), claims,
+		client.InNamespace(ns),
+		client.MatchingLabels{metadata.LabelMultigresCluster: cr.Name},
+	); err != nil {
+		t.Fatalf("list backup PVCs: %v", err)
+	}
+	var backupClaims []corev1.PersistentVolumeClaim
+	for _, candidate := range claims.Items {
+		if candidate.Labels[metadata.LabelMultigresPool] == "" {
+			backupClaims = append(backupClaims, candidate)
+		}
+	}
+	if len(backupClaims) != 1 {
+		t.Fatalf("backup PVC count = %d, want 1", len(backupClaims))
+	}
+	claim := &backupClaims[0]
+	if len(claim.Spec.AccessModes) != 1 || claim.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Fatalf("backup PVC access modes = %v, want [ReadWriteMany]", claim.Spec.AccessModes)
+	}
+
+	pods := &corev1.PodList{}
+	if err := c.List(context.Background(), pods,
+		client.InNamespace(ns),
+		client.MatchingLabels{
+			metadata.LabelMultigresCluster: cr.Name,
+			metadata.LabelMultigresPool:    "default",
+		},
+	); err != nil {
+		t.Fatalf("list pooler pods: %v", err)
+	}
+	if len(pods.Items) != 2 {
+		t.Fatalf("pooler pod count = %d, want 2", len(pods.Items))
+	}
+	for _, pod := range pods.Items {
+		var mountedClaim string
+		for _, volume := range pod.Spec.Volumes {
+			if volume.Name == "backup" && volume.PersistentVolumeClaim != nil {
+				mountedClaim = volume.PersistentVolumeClaim.ClaimName
+				break
+			}
+		}
+		if mountedClaim != claim.Name {
+			t.Errorf("pod %q mounts backup claim %q, want %q", pod.Name, mountedClaim, claim.Name)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	err = wait.PollUntilContextCancel(ctx, 3*time.Second, true, func(ctx context.Context) (bool, error) {
+		shards := &multigresv1alpha1.ShardList{}
+		if err := c.List(ctx, shards,
+			client.InNamespace(ns),
+			client.MatchingLabels{metadata.LabelMultigresCluster: cr.Name},
+		); err != nil || len(shards.Items) != 1 {
+			return false, nil
+		}
+		for _, role := range shards.Items[0].Status.PodRoles {
+			if role == "PRIMARY" {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("timed out waiting for bootstrap to elect a primary: %v", err)
+	}
 }
 
 func testPDB(t *testing.T) {
