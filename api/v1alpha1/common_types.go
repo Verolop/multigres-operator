@@ -224,7 +224,7 @@ type FilesystemBackupConfig struct {
 	Path string `json:"path,omitempty"`
 
 	// Storage defines the PVC configuration for the backup volume.
-	// This volume is shared by all pools in the shard (per-cell).
+	// This volume is shared by all pools in the shard.
 	// +optional
 	Storage StorageSpec `json:"storage,omitempty"`
 }

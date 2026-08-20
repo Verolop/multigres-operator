@@ -236,11 +236,10 @@ func (r *ShardReconciler) reconcileBackupCipherSecret(
 	return nil
 }
 
-// reconcileSharedBackupPVC creates or updates the shared backup PVC for a specific cell.
+// reconcileSharedBackupPVC creates or updates the shared backup PVC for a shard.
 func (r *ShardReconciler) reconcileSharedBackupPVC(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
-	cellName string,
 ) error {
 	// S3 backups use object storage; no shared PVC is needed.
 	// TODO: Consider cleaning up orphaned backup PVCs when migrating from filesystem to S3.
@@ -250,7 +249,6 @@ func (r *ShardReconciler) reconcileSharedBackupPVC(
 
 	desired, err := BuildSharedBackupPVC(
 		shard,
-		cellName,
 		ShouldDeleteShardLevelPVCOnRemoval(shard),
 		r.Scheme,
 	)
