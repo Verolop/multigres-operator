@@ -224,6 +224,42 @@ func TestBuildPoolPod_Volumes(t *testing.T) {
 	}
 }
 
+func TestBuildPoolPod_UsesShardWideBackupPVC(t *testing.T) {
+	shard := newTestShard()
+	shard.Spec.Backup = &multigresv1alpha1.BackupConfig{
+		Type:       multigresv1alpha1.BackupTypeFilesystem,
+		Filesystem: &multigresv1alpha1.FilesystemBackupConfig{},
+	}
+
+	pool := newTestPoolSpec()
+	pool.Cells = []multigresv1alpha1.CellName{"zone-a", "zone-b"}
+	podA, err := BuildPoolPod(shard, "main", "zone-a", pool, 0, testScheme())
+	if err != nil {
+		t.Fatalf("build zone-a pooler pod: %v", err)
+	}
+	podB, err := BuildPoolPod(shard, "main", "zone-b", pool, 0, testScheme())
+	if err != nil {
+		t.Fatalf("build zone-b pooler pod: %v", err)
+	}
+
+	backupClaim := func(pod *corev1.Pod) string {
+		for _, volume := range pod.Spec.Volumes {
+			if volume.Name == BackupVolumeName && volume.PersistentVolumeClaim != nil {
+				return volume.PersistentVolumeClaim.ClaimName
+			}
+		}
+		return ""
+	}
+
+	want := BuildSharedBackupPVCName(shard)
+	if got := backupClaim(podA); got != want {
+		t.Errorf("zone-a backup claim = %q, want %q", got, want)
+	}
+	if got := backupClaim(podB); got != want {
+		t.Errorf("zone-b backup claim = %q, want %q", got, want)
+	}
+}
+
 func TestBuildPoolPod_PostgresPasswordFile(t *testing.T) {
 	pod, err := BuildPoolPod(newTestShard(), "main", "z1", newTestPoolSpec(), 0, testScheme())
 	if err != nil {

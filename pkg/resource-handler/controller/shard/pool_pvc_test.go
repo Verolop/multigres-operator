@@ -225,7 +225,7 @@ func TestBuildSharedBackupPVC_OwnerRefWithDeletePolicy(t *testing.T) {
 		},
 	}
 
-	pvc, err := BuildSharedBackupPVC(shard, "z1", true, testScheme())
+	pvc, err := BuildSharedBackupPVC(shard, true, testScheme())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestBuildSharedBackupPVC_NoOwnerRefWithRetainPolicy(t *testing.T) {
 		},
 	}
 
-	pvc, err := BuildSharedBackupPVC(shard, "z1", false, testScheme())
+	pvc, err := BuildSharedBackupPVC(shard, false, testScheme())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
