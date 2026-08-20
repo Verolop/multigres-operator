@@ -562,6 +562,16 @@ func (r *Resolver) ValidateClusterLogic(
 
 					if isRWO {
 						for poolName, pool := range pools {
+							if len(pool.Cells) > 1 {
+								warnings = append(warnings, fmt.Sprintf(
+									"Shard '%s' uses filesystem backups with ReadWriteOnce (RWO) storage but pool '%s' spans %d cells. "+
+										"A shard-wide backup PVC must be mounted by every cell, so configure ReadWriteMany (RWX) storage or use S3 backups.",
+									shard.Name,
+									poolName,
+									len(pool.Cells),
+								))
+							}
+
 							replicas := int32(1)
 							if pool.ReplicasPerCell != nil {
 								replicas = *pool.ReplicasPerCell
