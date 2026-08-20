@@ -709,7 +709,16 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 			cluster: &multigresv1alpha1.MultigresCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
-					Backup: &multigresv1alpha1.BackupConfig{Type: multigresv1alpha1.BackupTypeFilesystem, Filesystem: &multigresv1alpha1.FilesystemBackupConfig{Storage: multigresv1alpha1.StorageSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}}}},
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteMany,
+								},
+							},
+						},
+					},
 					Cells: []multigresv1alpha1.CellConfig{
 						{Name: "zone-1"},
 						{Name: "zone-2"},
@@ -730,7 +739,16 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 			cluster: &multigresv1alpha1.MultigresCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
-					Backup: &multigresv1alpha1.BackupConfig{Type: multigresv1alpha1.BackupTypeFilesystem, Filesystem: &multigresv1alpha1.FilesystemBackupConfig{Storage: multigresv1alpha1.StorageSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}}}},
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteMany,
+								},
+							},
+						},
+					},
 					Cells: []multigresv1alpha1.CellConfig{
 						{Name: "zone-1"},
 						{Name: "zone-2"},
@@ -759,7 +777,16 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 			cluster: &multigresv1alpha1.MultigresCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
-					Backup: &multigresv1alpha1.BackupConfig{Type: multigresv1alpha1.BackupTypeFilesystem, Filesystem: &multigresv1alpha1.FilesystemBackupConfig{Storage: multigresv1alpha1.StorageSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}}}},
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteMany,
+								},
+							},
+						},
+					},
 					Cells: []multigresv1alpha1.CellConfig{
 						{Name: "zone-1"},
 						{Name: "zone-2"},
@@ -863,7 +890,16 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					DurabilityPolicy: "MULTI_CELL_AT_LEAST_2",
-					Backup:           &multigresv1alpha1.BackupConfig{Type: multigresv1alpha1.BackupTypeFilesystem, Filesystem: &multigresv1alpha1.FilesystemBackupConfig{Storage: multigresv1alpha1.StorageSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}}}},
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteMany,
+								},
+							},
+						},
+					},
 					Cells: []multigresv1alpha1.CellConfig{
 						{Name: "zone-1"},
 						{Name: "zone-2"},
@@ -885,7 +921,16 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
 				Spec: multigresv1alpha1.MultigresClusterSpec{
 					DurabilityPolicy: "MULTI_CELL_AT_LEAST_2",
-					Backup:           &multigresv1alpha1.BackupConfig{Type: multigresv1alpha1.BackupTypeFilesystem, Filesystem: &multigresv1alpha1.FilesystemBackupConfig{Storage: multigresv1alpha1.StorageSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}}}},
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteMany,
+								},
+							},
+						},
+					},
 					Cells: []multigresv1alpha1.CellConfig{
 						{Name: "zone-1"},
 						{Name: "zone-2"},
