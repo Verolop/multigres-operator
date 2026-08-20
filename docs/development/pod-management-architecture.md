@@ -93,7 +93,7 @@ This architectural change was motivated by the fact that multigres has its own i
                      ├── Pod-1  ← operator-managed
                      ├── PVC-0  ← operator-managed (per-pod data)
                      ├── PVC-1  ← operator-managed (per-pod data)
-                     ├── Backup PVC (shared across pods in cell)
+                     ├── Backup PVC (shared across the shard)
                      ├── Headless Service (DNS resolution)
                      └── PodDisruptionBudget (maxUnavailable: 1)
 ```
@@ -101,7 +101,7 @@ This architectural change was motivated by the fact that multigres has its own i
 Key points:
 - **No StatefulSets** in the resource tree for pool pods.
 - **Headless Service** is still required for DNS resolution. Multigres's `FullyQualifiedHostname()` uses DNS reverse lookup, so pods need resolvable FQDNs.
-- **Shared Backup PVC** is per-shard-per-cell for filesystem backups; replaced with EmptyDir for S3. **Requires RWX storage or S3 for multi-replica cells** — see [PVC Management § Shared Backup PVC](#shared-backup-pvc).
+- **Shared Backup PVC** is per-shard for filesystem backups; replaced with EmptyDir for S3. **Requires RWX storage or S3 when poolers span multiple cells or replicas** — see [PVC Management § Shared Backup PVC](#shared-backup-pvc).
 - **PDB** is per-pool-per-cell to limit voluntary disruption.
 
 ---
@@ -288,25 +288,7 @@ Each pool pod gets its own data PVC named `data-{base-name}-{index}`. These PVCs
 
 ### Shared Backup PVC
 
-One shared PVC per shard per cell for filesystem-based backups, mounted at `/backups` on all pods. For S3 backups, this is replaced with an `EmptyDir` volume.
-
-> **⚠️ Multi-Attach Limitation with RWO Storage:**
->
-> When using standard block storage (EBS gp2/gp3) with `ReadWriteOnce` access mode and `WaitForFirstConsumer` binding, the sequential pod creation model causes `Multi-Attach` errors for multi-replica cells:
->
-> 1. Pod-0 is created, scheduled to Node A. The CSI driver provisions the EBS volume in Node A's AZ and attaches it.
-> 2. Pod-0 becomes Ready. The operator creates Pod-1 on the next reconcile.
-> 3. Pod-1 hits the scheduler. The PV's `nodeAffinity` constrains it to the same AZ, but the scheduler does not detect the active RWO attachment on Node A. If a second node exists in the AZ, the scheduler may place Pod-1 there.
-> 4. The `attachdetach-controller` attempts to attach the volume to Node B and fails with `Multi-Attach error`.
->
-> **Why this didn't happen with StatefulSets (v0.2.6):** The old architecture used `ParallelPodManagement`, which submitted all pods to the scheduler simultaneously. With `WaitForFirstConsumer`, the PVC was still unbound when all pods entered the scheduling queue. The first pod to be processed annotated the PVC with `volume.kubernetes.io/selected-node`, constraining subsequent pods to the same AZ. With one node per AZ (common in dev/test EKS clusters), all pods landed on the same node deterministically. This prevented Multi-Attach errors but caused **silent HA loss** — all replicas on a single node. The current parallel creation approach has the same scheduling characteristic.
->
-> **Solutions:**
-> - **S3 (Recommended for production):** No shared PVC needed — the operator uses `EmptyDir` for scratch space and all pods connect to S3 independently.
-> - **RWX Storage:** Use a StorageClass that supports `ReadWriteMany` (NFS, EFS, CephFS).
-> - **Single replica per cell:** With `replicasPerCell: 1`, only one pod mounts the PVC and the issue does not arise.
-
-See the [Backup Architecture](backup-architecture.md) document for the shared PVC design rationale.
+Filesystem backups use one PVC per shard, mounted at `/backups` by every pooler. Use RWX storage whenever more than one pod mounts it; use S3 if that is not available.
 
 ### PVC Deletion Policy
 
@@ -371,7 +353,7 @@ Metrics are emitted per pool via `monitoring.SetShardPoolReplicas()`. A `PoolEmp
 | **Direct pod creation and recreation** | Pods created per-index, auto-recreated on failure |
 | **Parallel pod creation** | All missing pods created in a single reconcile pass for fast bootstrap |
 | **Per-pod data PVCs** | Explicitly created, named by index |
-| **Shared backup PVC** | Per-shard-per-cell, skipped for S3 |
+| **Shared backup PVC** | Per-shard, skipped for S3 |
 | **Headless Service for DNS** | Pod hostname + subdomain for FQDN resolution |
 | **PodDisruptionBudgets** | `maxUnavailable: 1` per pool per cell |
 | **Drain state machine** | Annotation-based, coordinated within the shard controller |
