@@ -38,7 +38,7 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 	}
 
 	cr := framework.MustLoadCluster("test/e2e/fixtures/base.yaml", ns)
-	cr.Name = "multi-cell-filesystem-backup"
+	cr.Name = "multi-cell-fs-backup"
 	cr.Spec.Cells = append(cr.Spec.Cells, multigresv1alpha1.CellConfig{
 		Name:   "zone-b",
 		ZoneID: "us-central1-a",
