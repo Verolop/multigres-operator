@@ -37,11 +37,19 @@ func (r *Resolver) ResolveCell(
 	if localTopo != nil {
 		roots, err := topology.NewRoots(cluster.Annotations, cluster.Namespace, cluster.Name)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("deriving topology roots for cell %q: %w", cellSpec.Name, err)
+			return nil, nil, nil, fmt.Errorf(
+				"deriving topology roots for cell %q: %w",
+				cellSpec.Name,
+				err,
+			)
 		}
 		defaultRootPath, err := roots.Cell(string(cellSpec.Name))
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("deriving topology root for cell %q: %w", cellSpec.Name, err)
+			return nil, nil, nil, fmt.Errorf(
+				"deriving topology root for cell %q: %w",
+				cellSpec.Name,
+				err,
+			)
 		}
 		if localTopo.Etcd != nil {
 			defaultEtcdSpec(localTopo.Etcd, defaultRootPath)
