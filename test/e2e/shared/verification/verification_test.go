@@ -149,9 +149,19 @@ func createStaticRWXVolume(t *testing.T, namespace string) {
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
 			StorageClassName:              "e2e-rwx",
+			NodeAffinity: &corev1.VolumeNodeAffinity{
+				Required: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+						MatchExpressions: []corev1.NodeSelectorRequirement{{
+							Key:      "node-role.kubernetes.io/control-plane",
+							Operator: corev1.NodeSelectorOpExists,
+						}},
+					}},
+				},
+			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: "/var/local/multigres-e2e-rwx",
+					Path: "/var/local/multigres-e2e-rwx/" + namespace,
 					Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 				},
 			},
