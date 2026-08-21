@@ -649,8 +649,8 @@ func TestRegisterCellFromSpec(t *testing.T) {
 		if !reflect.DeepEqual(cell.ServerAddresses, []string{"global:2379"}) {
 			t.Errorf("expected global topo address fallback, got %v", cell.ServerAddresses)
 		}
-		if cell.Root != "/multigres/default/cluster/cell2" {
-			t.Errorf("expected distinct cell root on shared global topology, got %s", cell.Root)
+		if cell.Root != "/multigres/global" {
+			t.Errorf("expected global topology root fallback, got %s", cell.Root)
 		}
 	})
 

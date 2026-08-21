@@ -112,7 +112,7 @@ func cellMetadataFromTopoRefs(
 	return &clustermetadata.Cell{
 		Name:            cellName,
 		ServerAddresses: []string{globalTopo.Address},
-		Root:            defaultCellRoot,
+		Root:            globalTopo.RootPath,
 	}
 }
 
