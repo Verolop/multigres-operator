@@ -37,6 +37,10 @@ const (
 	testTimeout   = 10 * time.Second
 )
 
+func canonicalGlobalRoot(clusterName string) string {
+	return "/multigres/" + testNamespace + "/" + clusterName + "/global"
+}
+
 // setupIntegration bootstraps the test environment, controller, and default templates.
 // It returns a ready-to-use K8s Client and a ResourceWatcher.
 func setupIntegration(t *testing.T) (client.Client, *testutil.ResourceWatcher) {
@@ -505,7 +509,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						AllCells: []multigresv1alpha1.CellName{"zone-a"},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        clusterName + "-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot(clusterName),
 							Implementation: "etcd",
 						},
 						TopologyReconciliation: multigresv1alpha1.TopologyReconciliation{
@@ -552,7 +556,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        clusterName + "-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot(clusterName),
 							Implementation: "etcd",
 						},
 						Shards: []multigresv1alpha1.ShardResolvedSpec{
@@ -868,7 +872,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						AllCells: []multigresv1alpha1.CellName{"zone-a"},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        "minimal-cluster-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot("minimal-cluster"),
 							Implementation: "etcd",
 						},
 						TopologyReconciliation: multigresv1alpha1.TopologyReconciliation{
@@ -914,7 +918,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        "minimal-cluster-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot("minimal-cluster"),
 							Implementation: "etcd",
 						},
 						Shards: []multigresv1alpha1.ShardResolvedSpec{
@@ -1230,7 +1234,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						AllCells: []multigresv1alpha1.CellName{"zone-a"},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        "lazy-cluster-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot("lazy-cluster"),
 							Implementation: "etcd",
 						},
 						TopologyReconciliation: multigresv1alpha1.TopologyReconciliation{
@@ -1276,7 +1280,7 @@ func TestMultigresCluster_HappyPath(t *testing.T) {
 						},
 						GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
 							Address:        "lazy-cluster-global-topo." + testNamespace + ".svc:2379",
-							RootPath:       "/multigres/global",
+							RootPath:       canonicalGlobalRoot("lazy-cluster"),
 							Implementation: "etcd",
 						},
 						Shards: []multigresv1alpha1.ShardResolvedSpec{
