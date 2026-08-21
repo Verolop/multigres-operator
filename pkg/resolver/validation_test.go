@@ -1329,6 +1329,49 @@ func TestResolver_ValidateClusterLogic(t *testing.T) {
 			},
 			// wantWarnings is nil: ReadWriteMany sets isRWO=false, suppressing the replica warning
 		},
+		"Filesystem RWO backup warns when separate pools share the backup PVC": {
+			cluster: &multigresv1alpha1.MultigresCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "valid", Namespace: "default"},
+				Spec: multigresv1alpha1.MultigresClusterSpec{
+					Backup: &multigresv1alpha1.BackupConfig{
+						Type: multigresv1alpha1.BackupTypeFilesystem,
+						Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
+							Storage: multigresv1alpha1.StorageSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteOnce,
+								},
+							},
+						},
+					},
+					Cells: []multigresv1alpha1.CellConfig{
+						{Name: "zone-1"},
+						{Name: "zone-2"},
+					},
+					Databases: []multigresv1alpha1.DatabaseConfig{{
+						TableGroups: []multigresv1alpha1.TableGroupConfig{{
+							Shards: []multigresv1alpha1.ShardConfig{{
+								Name: "s0",
+								Spec: &multigresv1alpha1.ShardInlineSpec{
+									Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
+										"pool-a": {
+											Type:            "readWrite",
+											Cells:           []multigresv1alpha1.CellName{"zone-1"},
+											ReplicasPerCell: ptr.To(int32(1)),
+										},
+										"pool-b": {
+											Type:            "readWrite",
+											Cells:           []multigresv1alpha1.CellName{"zone-2"},
+											ReplicasPerCell: ptr.To(int32(1)),
+										},
+									},
+								},
+							}},
+						}},
+					}},
+				},
+			},
+			wantWarnings: []string{"2 poolers mount the shard-wide backup PVC"},
+		},
 		"SC list error propagated": {
 			cluster: &multigresv1alpha1.MultigresCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "list-err", Namespace: "default"},

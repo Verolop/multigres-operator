@@ -22,6 +22,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -32,8 +35,12 @@ import (
 	"github.com/multigres/multigres-operator/pkg/testutil"
 )
 
-// SharedClusterName is the well-known name for the shared Kind cluster.
-const SharedClusterName = "e2e-shared"
+const (
+	// SharedClusterName is the well-known name for the shared Kind cluster.
+	SharedClusterName = "e2e-shared"
+
+	rwxStorageClassName = "e2e-rwx"
+)
 
 // Cluster holds connection state for a Kind cluster.
 type Cluster struct {
@@ -196,6 +203,10 @@ func setupCluster(name string) (*Cluster, error) {
 		return nil, fmt.Errorf("label kind nodes: %w", err)
 	}
 
+	if err := ensureRWXStorageClass(ctx, cs); err != nil {
+		return nil, fmt.Errorf("create RWX storage class: %w", err)
+	}
+
 	// Load images directly into each Kind node; idempotent.
 	preset := testutil.DefaultOperatorPreset()
 	imgs := append([]string{preset.Image}, runtimeImages()...)
@@ -209,6 +220,20 @@ func setupCluster(name string) (*Cluster, error) {
 	}
 
 	return c, nil
+}
+
+// ensureRWXStorageClass creates the class used by the static RWX volume in
+// the filesystem backup test. The test supplies its own PV, so no provisioner
+// is needed.
+func ensureRWXStorageClass(ctx context.Context, cs kubernetes.Interface) error {
+	_, err := cs.StorageV1().StorageClasses().Create(ctx, &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: rwxStorageClassName},
+		Provisioner: "kubernetes.io/no-provisioner",
+	}, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
 }
 
 func deployOperator(kubecfg, image, namespace, deploymentName string) error {

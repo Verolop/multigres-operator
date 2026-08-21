@@ -4,11 +4,15 @@ package verification_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiresource "k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
@@ -27,6 +31,7 @@ func TestResourceVerification(t *testing.T) {
 
 func testMultiCellFilesystemBackup(t *testing.T) {
 	ns := cluster.CreateNamespace(t)
+	createStaticRWXVolume(t, ns)
 	c, err := cluster.CRClient()
 	if err != nil {
 		t.Fatalf("create CR client: %v", err)
@@ -43,6 +48,7 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 		Filesystem: &multigresv1alpha1.FilesystemBackupConfig{
 			Storage: multigresv1alpha1.StorageSpec{
 				Size:        "1Gi",
+				Class:       "e2e-rwx",
 				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 			},
 		},
@@ -125,6 +131,38 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("timed out waiting for bootstrap to elect a primary: %v", err)
 	}
+}
+
+// createStaticRWXVolume supplies the claim used by this test. A Kind cluster
+// has one node, so a hostPath volume is enough to verify that two poolers can
+// mount the same RWX claim without adding a provisioner to e2e infrastructure.
+func createStaticRWXVolume(t *testing.T, namespace string) {
+	t.Helper()
+
+	name := fmt.Sprintf("e2e-rwx-%s", namespace)
+	_, err := cluster.Clientset.CoreV1().PersistentVolumes().Create(context.Background(), &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{
+				corev1.ResourceStorage: apiresource.MustParse("1Gi"),
+			},
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			StorageClassName:              "e2e-rwx",
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/local/multigres-e2e-rwx",
+					Type: ptr.To(corev1.HostPathDirectoryOrCreate),
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create static RWX volume: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cluster.Clientset.CoreV1().PersistentVolumes().Delete(context.Background(), name, metav1.DeleteOptions{})
+	})
 }
 
 func testPDB(t *testing.T) {
