@@ -5,6 +5,7 @@ package verification_test
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	"github.com/multigres/multigres-operator/test/e2e/framework"
 )
+
+const backupVolumeName = "backup-data"
 
 // TestResourceVerification verifies that the operator creates the expected
 // Kubernetes resources (PDBs, deployments, services) with correct configuration.
@@ -106,7 +109,7 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 	for _, pod := range pods.Items {
 		var mountedClaim string
 		for _, volume := range pod.Spec.Volumes {
-			if volume.Name == "backup" && volume.PersistentVolumeClaim != nil {
+			if volume.Name == backupVolumeName && volume.PersistentVolumeClaim != nil {
 				mountedClaim = volume.PersistentVolumeClaim.ClaimName
 				break
 			}
@@ -145,6 +148,9 @@ func createStaticRWXVolume(t *testing.T, namespace string) {
 	t.Helper()
 
 	name := fmt.Sprintf("e2e-rwx-%s", namespace)
+	hostPath := "/var/local/multigres-e2e-rwx/" + namespace
+	prepareStaticRWXHostPath(t, hostPath)
+
 	_, err := cluster.Clientset.CoreV1().PersistentVolumes().Create(context.Background(), &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: corev1.PersistentVolumeSpec{
@@ -166,7 +172,7 @@ func createStaticRWXVolume(t *testing.T, namespace string) {
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: "/var/local/multigres-e2e-rwx/" + namespace,
+					Path: hostPath,
 					Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 				},
 			},
@@ -178,6 +184,18 @@ func createStaticRWXVolume(t *testing.T, namespace string) {
 	t.Cleanup(func() {
 		_ = cluster.Clientset.CoreV1().PersistentVolumes().Delete(context.Background(), name, metav1.DeleteOptions{})
 	})
+}
+
+func prepareStaticRWXHostPath(t *testing.T, path string) {
+	t.Helper()
+
+	node := cluster.Name + "-control-plane"
+	for _, args := range [][]string{{"mkdir", "-p", path}, {"chmod", "0777", path}} {
+		output, err := exec.CommandContext(context.Background(), "docker", append([]string{"exec", node}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s static RWX hostPath: %v\n%s", args[0], err, output)
+		}
+	}
 }
 
 func testPDB(t *testing.T) {
