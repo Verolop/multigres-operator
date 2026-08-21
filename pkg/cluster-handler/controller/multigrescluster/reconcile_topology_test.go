@@ -170,7 +170,7 @@ func TestReconcileTopologyManagedLocalTopo(t *testing.T) {
 	if !reflect.DeepEqual(cell.ServerAddresses, []string{wantAddress}) {
 		t.Errorf("expected managed local topology service, got %v", cell.ServerAddresses)
 	}
-	if cell.Root != "/multigres/cell1" {
+	if cell.Root != "/multigres/default/cluster/cell1" {
 		t.Errorf("expected default local root, got %q", cell.Root)
 	}
 }
@@ -353,8 +353,8 @@ func TestReconcileTopologyKeepsExistingCellRecordWhileManagedLocalTopoWaits(t *t
 	if !reflect.DeepEqual(cell.ServerAddresses, []string{"http://global-etcd:2379"}) {
 		t.Errorf("existing cell address = %v, want global topology address", cell.ServerAddresses)
 	}
-	if cell.Root != "/multigres/global" {
-		t.Errorf("existing cell root = %q, want /multigres/global", cell.Root)
+	if cell.Root != "/multigres/default/cluster/cell1" {
+		t.Errorf("existing cell root = %q, want canonical cell root", cell.Root)
 	}
 }
 
