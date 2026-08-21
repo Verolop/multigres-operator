@@ -191,6 +191,7 @@ func (r *Resolver) ResolveGlobalTopo(
 		finalSpec = &multigresv1alpha1.GlobalTopoServerSpec{
 			Etcd:              coreTemplate.Spec.GlobalTopoServer.Etcd.DeepCopy(),
 			PVCDeletionPolicy: coreTemplate.Spec.GlobalTopoServer.PVCDeletionPolicy,
+			Placement:         coreTemplate.Spec.GlobalTopoServer.Placement.DeepCopy(),
 		}
 	} else {
 		finalSpec = &multigresv1alpha1.GlobalTopoServerSpec{
@@ -222,6 +223,10 @@ func (r *Resolver) ResolveGlobalTopo(
 		finalSpec.PVCDeletionPolicy = spec.PVCDeletionPolicy
 	}
 
+	if spec != nil {
+		mergePodPlacementSpec(&finalSpec.Placement, spec.Placement)
+	}
+
 	return finalSpec, nil
 }
 
@@ -229,7 +234,7 @@ func (r *Resolver) ResolveGlobalTopo(
 func (r *Resolver) ResolveMultiadmin(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
-) (*multigresv1alpha1.StatelessSpec, error) {
+) (*multigresv1alpha1.StatelessSpec, *multigresv1alpha1.PodPlacementSpec, error) {
 	var templateName multigresv1alpha1.TemplateRef
 	var spec *multigresv1alpha1.MultiadminConfig
 
@@ -245,22 +250,29 @@ func (r *Resolver) ResolveMultiadmin(
 
 	coreTemplate, err := r.ResolveCoreTemplate(ctx, templateName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	finalSpec := &multigresv1alpha1.StatelessSpec{}
+	var placement *multigresv1alpha1.PodPlacementSpec
 
-	if coreTemplate != nil && coreTemplate.Spec.Multiadmin != nil {
-		finalSpec = coreTemplate.Spec.Multiadmin.DeepCopy()
+	if coreTemplate != nil {
+		if coreTemplate.Spec.Multiadmin != nil {
+			finalSpec = coreTemplate.Spec.Multiadmin.DeepCopy()
+		}
+		mergePodPlacementSpec(&placement, coreTemplate.Spec.MultiadminPlacement)
 	}
 
-	if spec != nil && spec.Spec != nil {
-		mergeStatelessSpec(finalSpec, spec.Spec)
+	if spec != nil {
+		if spec.Spec != nil {
+			mergeStatelessSpec(finalSpec, spec.Spec)
+		}
+		mergePodPlacementSpec(&placement, spec.Placement)
 	}
 
 	defaultStatelessSpec(finalSpec, DefaultResourcesAdmin(), DefaultAdminReplicas)
 
-	return finalSpec, nil
+	return finalSpec, placement, nil
 }
 
 // ResolveMultiadminWeb determines the final MultiadminWeb configuration.

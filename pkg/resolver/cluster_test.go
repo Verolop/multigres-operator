@@ -663,6 +663,84 @@ func TestResolver_ResolveGlobalTopo(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		"Inline placement": {
+			cluster: &multigresv1alpha1.MultigresCluster{
+				Spec: multigresv1alpha1.MultigresClusterSpec{
+					GlobalTopoServer: &multigresv1alpha1.GlobalTopoServerSpec{
+						Etcd: &multigresv1alpha1.EtcdSpec{Image: "inline"},
+						Placement: &multigresv1alpha1.PodPlacementSpec{
+							Tolerations: []corev1.Toleration{
+								{
+									Key:      "workload",
+									Operator: corev1.TolerationOpEqual,
+									Value:    "customer-pg",
+									Effect:   corev1.TaintEffectNoSchedule,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &multigresv1alpha1.GlobalTopoServerSpec{
+				Etcd: &multigresv1alpha1.EtcdSpec{
+					Image:     "inline",
+					Replicas:  ptr.To(DefaultEtcdReplicas),
+					RootPath:  DefaultTopoRootPath,
+					Resources: DefaultResourcesEtcd(),
+					Storage:   multigresv1alpha1.StorageSpec{Size: DefaultEtcdStorageSize},
+				},
+				Placement: &multigresv1alpha1.PodPlacementSpec{
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "workload",
+							Operator: corev1.TolerationOpEqual,
+							Value:    "customer-pg",
+							Effect:   corev1.TaintEffectNoSchedule,
+						},
+					},
+				},
+			},
+		},
+		"Template placement with inline clear": {
+			cluster: &multigresv1alpha1.MultigresCluster{
+				Spec: multigresv1alpha1.MultigresClusterSpec{
+					GlobalTopoServer: &multigresv1alpha1.GlobalTopoServerSpec{
+						TemplateRef: "with-placement",
+						Placement:   &multigresv1alpha1.PodPlacementSpec{},
+					},
+				},
+			},
+			objects: []client.Object{
+				&multigresv1alpha1.CoreTemplate{
+					ObjectMeta: metav1.ObjectMeta{Name: "with-placement", Namespace: "default"},
+					Spec: multigresv1alpha1.CoreTemplateSpec{
+						GlobalTopoServer: &multigresv1alpha1.TopoServerSpec{
+							Etcd: &multigresv1alpha1.EtcdSpec{},
+							Placement: &multigresv1alpha1.PodPlacementSpec{
+								Tolerations: []corev1.Toleration{
+									{
+										Key:      "workload",
+										Operator: corev1.TolerationOpEqual,
+										Value:    "customer-pg",
+										Effect:   corev1.TaintEffectNoSchedule,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &multigresv1alpha1.GlobalTopoServerSpec{
+				Etcd: &multigresv1alpha1.EtcdSpec{
+					Image:     DefaultEtcdImage,
+					Replicas:  ptr.To(DefaultEtcdReplicas),
+					RootPath:  DefaultTopoRootPath,
+					Resources: DefaultResourcesEtcd(),
+					Storage:   multigresv1alpha1.StorageSpec{Size: DefaultEtcdStorageSize},
+				},
+				Placement: &multigresv1alpha1.PodPlacementSpec{},
+			},
+		},
 		"External Spec": {
 			cluster: &multigresv1alpha1.MultigresCluster{
 				Spec: multigresv1alpha1.MultigresClusterSpec{
@@ -875,10 +953,11 @@ func TestResolver_ResolveMultiadmin(t *testing.T) {
 	coreTpl, _, _, ns := setupFixtures(t)
 
 	tests := map[string]struct {
-		cluster *multigresv1alpha1.MultigresCluster
-		objects []client.Object
-		want    *multigresv1alpha1.StatelessSpec
-		wantErr bool
+		cluster       *multigresv1alpha1.MultigresCluster
+		objects       []client.Object
+		want          *multigresv1alpha1.StatelessSpec
+		wantPlacement *multigresv1alpha1.PodPlacementSpec
+		wantErr       bool
 	}{
 		"Inline": {
 			cluster: &multigresv1alpha1.MultigresCluster{
@@ -892,6 +971,71 @@ func TestResolver_ResolveMultiadmin(t *testing.T) {
 				Replicas:  ptr.To(int32(10)),
 				Resources: DefaultResourcesAdmin(),
 			},
+		},
+		"Inline placement": {
+			cluster: &multigresv1alpha1.MultigresCluster{
+				Spec: multigresv1alpha1.MultigresClusterSpec{
+					Multiadmin: &multigresv1alpha1.MultiadminConfig{
+						Spec: &multigresv1alpha1.StatelessSpec{Replicas: ptr.To(int32(10))},
+						Placement: &multigresv1alpha1.PodPlacementSpec{
+							Tolerations: []corev1.Toleration{
+								{
+									Key:      "workload",
+									Operator: corev1.TolerationOpEqual,
+									Value:    "customer-pg",
+									Effect:   corev1.TaintEffectNoSchedule,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &multigresv1alpha1.StatelessSpec{
+				Replicas:  ptr.To(int32(10)),
+				Resources: DefaultResourcesAdmin(),
+			},
+			wantPlacement: &multigresv1alpha1.PodPlacementSpec{
+				Tolerations: []corev1.Toleration{
+					{
+						Key:      "workload",
+						Operator: corev1.TolerationOpEqual,
+						Value:    "customer-pg",
+						Effect:   corev1.TaintEffectNoSchedule,
+					},
+				},
+			},
+		},
+		"Template placement with inline clear": {
+			cluster: &multigresv1alpha1.MultigresCluster{
+				Spec: multigresv1alpha1.MultigresClusterSpec{
+					Multiadmin: &multigresv1alpha1.MultiadminConfig{
+						TemplateRef: "with-placement",
+						Placement:   &multigresv1alpha1.PodPlacementSpec{},
+					},
+				},
+			},
+			objects: []client.Object{
+				&multigresv1alpha1.CoreTemplate{
+					ObjectMeta: metav1.ObjectMeta{Name: "with-placement", Namespace: "default"},
+					Spec: multigresv1alpha1.CoreTemplateSpec{
+						MultiadminPlacement: &multigresv1alpha1.PodPlacementSpec{
+							Tolerations: []corev1.Toleration{
+								{
+									Key:      "workload",
+									Operator: corev1.TolerationOpEqual,
+									Value:    "customer-pg",
+									Effect:   corev1.TaintEffectNoSchedule,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: &multigresv1alpha1.StatelessSpec{
+				Replicas:  ptr.To(DefaultAdminReplicas),
+				Resources: DefaultResourcesAdmin(),
+			},
+			wantPlacement: &multigresv1alpha1.PodPlacementSpec{},
 		},
 		"Template": {
 			cluster: &multigresv1alpha1.MultigresCluster{
@@ -968,7 +1112,7 @@ func TestResolver_ResolveMultiadmin(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.objects...).Build()
 			r := NewResolver(c, ns)
 
-			got, err := r.ResolveMultiadmin(t.Context(), tc.cluster)
+			got, gotPlacement, err := r.ResolveMultiadmin(t.Context(), tc.cluster)
 			if tc.wantErr {
 				if err == nil {
 					t.Error("Expected error")
@@ -985,6 +1129,9 @@ func TestResolver_ResolveMultiadmin(t *testing.T) {
 				cmpopts.EquateEmpty(),
 			); diff != "" {
 				t.Errorf("Diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantPlacement, gotPlacement, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Placement diff (-want +got):\n%s", diff)
 			}
 		})
 	}

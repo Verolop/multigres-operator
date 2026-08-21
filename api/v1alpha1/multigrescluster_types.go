@@ -340,6 +340,11 @@ type MultiadminConfig struct {
 	// TemplateRef refers to a CoreTemplate to load configuration from.
 	// +optional
 	TemplateRef TemplateRef `json:"templateRef,omitempty"`
+
+	// Placement defines optional scheduling settings for multiadmin pods.
+	// Applies whether Spec or TemplateRef is used.
+	// +optional
+	Placement *PodPlacementSpec `json:"placement,omitempty"`
 }
 
 // MultiadminWebConfig defines the configuration for MultiadminWeb in the Cluster.

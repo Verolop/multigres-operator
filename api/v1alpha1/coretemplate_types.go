@@ -35,6 +35,10 @@ type CoreTemplateSpec struct {
 	// +optional
 	Multiadmin *StatelessSpec `json:"multiadmin,omitempty"`
 
+	// MultiadminPlacement defines optional scheduling settings for multiadmin pods.
+	// +optional
+	MultiadminPlacement *PodPlacementSpec `json:"multiadminPlacement,omitempty"`
+
 	// MultiadminWeb configuration.
 	// +optional
 	MultiadminWeb *StatelessSpec `json:"multiadminWeb,omitempty"`

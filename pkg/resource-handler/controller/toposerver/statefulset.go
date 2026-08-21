@@ -71,6 +71,12 @@ func BuildStatefulSet(
 		resources = toposerver.Spec.Etcd.Resources
 	}
 
+	// Defensive copy so the built StatefulSet doesn't alias the TopoServer's PodPlacementSpec.
+	var tolerations []corev1.Toleration
+	if toposerver.Spec.Placement != nil {
+		tolerations = append([]corev1.Toleration(nil), toposerver.Spec.Placement.Tolerations...)
+	}
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      toposerver.Name,
@@ -140,6 +146,7 @@ func BuildStatefulSet(
 							},
 						},
 					},
+					Tolerations: tolerations,
 				},
 			},
 			VolumeClaimTemplates:                 buildVolumeClaimTemplates(toposerver),

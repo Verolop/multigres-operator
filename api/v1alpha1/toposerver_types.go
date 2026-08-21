@@ -53,6 +53,10 @@ type TopoServerSpec struct {
 	// Inherited from MultigresCluster.
 	// +optional
 	PVCDeletionPolicy *PVCDeletionPolicy `json:"pvcDeletionPolicy,omitempty"`
+
+	// Placement defines optional scheduling settings for the etcd pods.
+	// +optional
+	Placement *PodPlacementSpec `json:"placement,omitempty"`
 }
 
 // ============================================================================
@@ -149,6 +153,10 @@ type GlobalTopoServerSpec struct {
 	// Overrides MultigresCluster setting.
 	// +optional
 	PVCDeletionPolicy *PVCDeletionPolicy `json:"pvcDeletionPolicy,omitempty"`
+
+	// Placement defines optional scheduling settings for the global topo server pods.
+	// +optional
+	Placement *PodPlacementSpec `json:"placement,omitempty"`
 }
 
 // ExternalTopoServerSpec defines connection details for an external system.

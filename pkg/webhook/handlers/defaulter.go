@@ -133,7 +133,7 @@ func (d *MultigresClusterDefaulter) Default(ctx context.Context, obj runtime.Obj
 		isUsingTemplate := hasInline || hasGlobalCore || hasImplicitCore
 
 		if !isUsingTemplate {
-			multiadmin, err := scopedResolver.ResolveMultiadmin(ctx, cluster)
+			multiadmin, placement, err := scopedResolver.ResolveMultiadmin(ctx, cluster)
 			if err != nil {
 				return fmt.Errorf("failed to resolve multiadmin: %w", err)
 			}
@@ -142,6 +142,9 @@ func (d *MultigresClusterDefaulter) Default(ctx context.Context, obj runtime.Obj
 			}
 			if multiadmin != nil {
 				cluster.Spec.Multiadmin.Spec = multiadmin
+			}
+			if placement != nil {
+				cluster.Spec.Multiadmin.Placement = placement
 			}
 		}
 	}

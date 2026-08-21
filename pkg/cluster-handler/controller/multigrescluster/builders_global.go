@@ -78,6 +78,7 @@ func BuildGlobalTopoServer(
 				RootPath:  spec.Etcd.RootPath,
 			},
 			PVCDeletionPolicy: finalPolicy,
+			Placement:         spec.Placement,
 		},
 	}
 
@@ -94,6 +95,7 @@ func BuildGlobalTopoServer(
 func BuildMultiadminDeployment(
 	cluster *multigresv1alpha1.MultigresCluster,
 	spec *multigresv1alpha1.StatelessSpec,
+	placement *multigresv1alpha1.PodPlacementSpec,
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
 	standardLabels := metadata.BuildStandardLabels(cluster.Name, metadata.ComponentMultiadmin)
@@ -101,6 +103,12 @@ func BuildMultiadminDeployment(
 
 	// Merge with user provided pod labels, but standard labels take precedence
 	podLabels := metadata.MergeLabels(standardLabels, spec.PodLabels)
+
+	// Defensive copy so the built Deployment doesn't alias the resolver's PodPlacementSpec.
+	var tolerations []corev1.Toleration
+	if placement != nil {
+		tolerations = append([]corev1.Toleration(nil), placement.Tolerations...)
+	}
 
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -186,7 +194,8 @@ func BuildMultiadminDeployment(
 							},
 						},
 					},
-					Affinity: spec.Affinity,
+					Affinity:    spec.Affinity,
+					Tolerations: tolerations,
 				},
 			},
 		},

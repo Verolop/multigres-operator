@@ -107,13 +107,13 @@ func (r *MultigresClusterReconciler) reconcileMultiadmin(
 	cluster *multigresv1alpha1.MultigresCluster,
 	res *resolver.Resolver,
 ) error {
-	spec, err := res.ResolveMultiadmin(ctx, cluster)
+	spec, placement, err := res.ResolveMultiadmin(ctx, cluster)
 	if err != nil {
 		r.Recorder.Event(cluster, "Warning", "TemplateMissing", err.Error())
 		return fmt.Errorf("failed to resolve multiadmin: %w", err)
 	}
 
-	desired, err := BuildMultiadminDeployment(cluster, spec, r.Scheme)
+	desired, err := BuildMultiadminDeployment(cluster, spec, placement, r.Scheme)
 	if err != nil {
 		return fmt.Errorf("failed to build multiadmin deployment: %w", err)
 	}

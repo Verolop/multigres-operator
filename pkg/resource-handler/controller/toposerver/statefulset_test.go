@@ -161,6 +161,161 @@ func TestBuildStatefulSet(t *testing.T) {
 				},
 			},
 		},
+		"with placement": {
+			toposerver: &multigresv1alpha1.TopoServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-toposerver",
+					Namespace: "default",
+					UID:       "test-uid",
+					Labels:    map[string]string{"multigres.com/cluster": "test-cluster"},
+				},
+				Spec: multigresv1alpha1.TopoServerSpec{
+					Placement: &multigresv1alpha1.PodPlacementSpec{
+						Tolerations: []corev1.Toleration{
+							{
+								Key:      "workload",
+								Operator: corev1.TolerationOpEqual,
+								Value:    "customer-pg",
+								Effect:   corev1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+			},
+			scheme: scheme,
+			want: &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-toposerver",
+					Namespace: "default",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":       "multigres",
+						"app.kubernetes.io/instance":   "test-cluster",
+						"app.kubernetes.io/component":  "toposerver",
+						"app.kubernetes.io/part-of":    "multigres",
+						"app.kubernetes.io/managed-by": "multigres-operator",
+						"multigres.com/cluster":        "test-cluster",
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion:         "multigres.com/v1alpha1",
+							Kind:               "TopoServer",
+							Name:               "test-toposerver",
+							UID:                "test-uid",
+							Controller:         ptr.To(true),
+							BlockOwnerDeletion: ptr.To(true),
+						},
+					},
+				},
+				Spec: appsv1.StatefulSetSpec{
+					ServiceName: "test-toposerver-headless",
+					Replicas:    ptr.To(int32(3)),
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"app.kubernetes.io/instance":  "test-cluster",
+							"app.kubernetes.io/component": "toposerver",
+							"multigres.com/cluster":       "test-cluster",
+						},
+					},
+					PodManagementPolicy: appsv1.ParallelPodManagement,
+					UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
+						Type: appsv1.RollingUpdateStatefulSetStrategyType,
+					},
+					PersistentVolumeClaimRetentionPolicy: &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+						WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+						WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+					},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								"app.kubernetes.io/name":       "multigres",
+								"app.kubernetes.io/instance":   "test-cluster",
+								"app.kubernetes.io/component":  "toposerver",
+								"app.kubernetes.io/part-of":    "multigres",
+								"app.kubernetes.io/managed-by": "multigres-operator",
+								"multigres.com/cluster":        "test-cluster",
+							},
+						},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:      "etcd",
+									Image:     multigresv1alpha1.DefaultEtcdImage,
+									Resources: corev1.ResourceRequirements{},
+									Env: buildContainerEnv(
+										"test-toposerver",
+										"default",
+										3,
+										"test-toposerver-headless",
+									),
+									Ports: buildContainerPorts(nil), // Default
+									VolumeMounts: []corev1.VolumeMount{
+										{
+											Name:      DataVolumeName,
+											MountPath: DataMountPath,
+										},
+									},
+									StartupProbe: &corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											HTTPGet: &corev1.HTTPGetAction{
+												Path: "/readyz",
+												Port: intstr.FromInt32(MetricsPort),
+											},
+										},
+										PeriodSeconds:    5,
+										FailureThreshold: 30,
+									},
+									LivenessProbe: &corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											HTTPGet: &corev1.HTTPGetAction{
+												Path: "/livez",
+												Port: intstr.FromInt32(MetricsPort),
+											},
+										},
+										PeriodSeconds: 10,
+									},
+									ReadinessProbe: &corev1.Probe{
+										ProbeHandler: corev1.ProbeHandler{
+											HTTPGet: &corev1.HTTPGetAction{
+												Path: "/readyz",
+												Port: intstr.FromInt32(MetricsPort),
+											},
+										},
+										PeriodSeconds: 5,
+									},
+								},
+							},
+							Tolerations: []corev1.Toleration{
+								{
+									Key:      "workload",
+									Operator: corev1.TolerationOpEqual,
+									Value:    "customer-pg",
+									Effect:   corev1.TaintEffectNoSchedule,
+								},
+							},
+						},
+					},
+					VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+						{
+							ObjectMeta: metav1.ObjectMeta{
+								Name: DataVolumeName,
+							},
+							Spec: corev1.PersistentVolumeClaimSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{
+									corev1.ReadWriteOnce,
+								},
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse(
+											DefaultStorageSize,
+										),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		"custom replicas and image": {
 			toposerver: &multigresv1alpha1.TopoServer{
 				ObjectMeta: metav1.ObjectMeta{
