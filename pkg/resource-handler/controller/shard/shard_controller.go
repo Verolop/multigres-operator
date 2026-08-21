@@ -491,26 +491,6 @@ func getMultiorchCells(shard *multigresv1alpha1.Shard) ([]multigresv1alpha1.Cell
 	return cells, nil
 }
 
-// getPoolCells returns the deduplicated, sorted set of cells from all pools.
-// Used for infrastructure that only needs to exist where pool pods run
-// (e.g., shared backup PVCs).
-func getPoolCells(shard *multigresv1alpha1.Shard) []multigresv1alpha1.CellName {
-	cellSet := make(map[multigresv1alpha1.CellName]bool)
-	for _, pool := range shard.Spec.Pools {
-		for _, cell := range pool.Cells {
-			cellSet[cell] = true
-		}
-	}
-
-	cells := make([]multigresv1alpha1.CellName, 0, len(cellSet))
-	for cell := range cellSet {
-		cells = append(cells, cell)
-	}
-
-	slices.Sort(cells)
-	return cells
-}
-
 // ShouldDeletePVCOnShardRemoval returns true when the effective PVCDeletionPolicy
 // for a pool resolves to Delete. Used by PVC builders to conditionally set
 // a controller ownerRef so Kubernetes GC cascade-deletes the PVC with the Shard.
