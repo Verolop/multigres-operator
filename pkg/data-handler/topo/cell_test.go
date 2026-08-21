@@ -14,11 +14,16 @@ import (
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	"github.com/multigres/multigres-operator/pkg/data-handler/topo"
+	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
 
 func newTestCell(name string) *multigresv1alpha1.Cell {
 	return &multigresv1alpha1.Cell{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{metadata.LabelMultigresCluster: "cluster"},
+		},
 		Spec: multigresv1alpha1.CellSpec{
 			Name: multigresv1alpha1.CellName(name),
 			GlobalTopoServer: multigresv1alpha1.GlobalTopoServerRef{
@@ -211,8 +216,35 @@ func TestRegisterCell(t *testing.T) {
 		if !reflect.DeepEqual(got.ServerAddresses, []string{"localhost:2379"}) {
 			t.Errorf("expected global topo address fallback, got %v", got.ServerAddresses)
 		}
-		if got.Root != "/test" {
-			t.Errorf("expected global topo root fallback, got %s", got.Root)
+		if got.Root != "/multigres/default/cluster/cell2" {
+			t.Errorf("expected distinct cell root on shared global topology, got %s", got.Root)
+		}
+	})
+
+	t.Run("uses project identity for a defaulted local topology root", func(t *testing.T) {
+		t.Parallel()
+		_, factory := memorytopo.NewServerAndFactory(context.Background(), "cell1")
+		store := topoclient.NewWithFactory(
+			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
+		)
+		defer func() { _ = store.Close() }()
+
+		cell := newTestCell("cell2")
+		cell.Annotations = map[string]string{metadata.AnnotationProjectRef: "proj_123"}
+		cell.Spec.TopoServer.External.RootPath = ""
+
+		if err := topo.RegisterCell(
+			context.Background(), store, record.NewFakeRecorder(10), cell,
+		); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		got, err := store.GetCell(context.Background(), "cell2")
+		if err != nil {
+			t.Fatalf("cell not found: %v", err)
+		}
+		if got.Root != "/multigres/proj_123/cell2" {
+			t.Errorf("expected project-scoped cell root, got %s", got.Root)
 		}
 	})
 }
