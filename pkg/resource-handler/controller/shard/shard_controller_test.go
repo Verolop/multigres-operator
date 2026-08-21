@@ -239,7 +239,7 @@ func TestShardReconciler_Reconcile(t *testing.T) {
 				}
 			},
 		},
-		"create backup PVCs for all active cells including pool-only cells": {
+		"create one shard-wide backup PVC for all active cells including pool-only cells": {
 			shard: &multigresv1alpha1.Shard{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pool-only-pvc-shard",
@@ -292,18 +292,12 @@ func TestShardReconciler_Reconcile(t *testing.T) {
 					t.Errorf("Multiorch Deployment for zone2 should NOT exist")
 				}
 
-				// Verify Backup PVCs were created for BOTH zone1 AND zone2
-				hashedPvc1 := buildHashedBackupPVCName(shard, "zone1")
+				// All poolers share one backup PVC, even across cells.
+				hashedPvc := buildHashedBackupPVCName(shard)
 				if err := c.Get(t.Context(),
-					types.NamespacedName{Name: hashedPvc1, Namespace: "default"},
+					types.NamespacedName{Name: hashedPvc, Namespace: "default"},
 					&corev1.PersistentVolumeClaim{}); err != nil {
-					t.Errorf("Backup PVC for zone1 should exist: %v", err)
-				}
-				hashedPvc2 := buildHashedBackupPVCName(shard, "zone2")
-				if err := c.Get(t.Context(),
-					types.NamespacedName{Name: hashedPvc2, Namespace: "default"},
-					&corev1.PersistentVolumeClaim{}); err != nil {
-					t.Errorf("Backup PVC for zone2 should exist: %v", err)
+					t.Errorf("Shard-wide backup PVC should exist: %v", err)
 				}
 			},
 		},
@@ -849,7 +843,7 @@ func TestShardReconciler_Reconcile(t *testing.T) {
 					if pvc, ok := obj.(*corev1.PersistentVolumeClaim); ok &&
 						strings.Contains(
 							pvc.Name,
-							"backup-data-test-cluster-testdb-default--zone1",
+							"backup-data-test-cluster-testdb-default",
 						) {
 						return testutil.ErrPermissionError
 					}
@@ -1023,10 +1017,7 @@ func TestShardReconciler_Reconcile(t *testing.T) {
 								)
 								obj.SetName(hashed)
 							} else if strings.Contains(name, "backup-data") {
-								hashed := buildHashedBackupPVCName(
-									tc.shard,
-									string(cell),
-								)
+								hashed := buildHashedBackupPVCName(tc.shard)
 								obj.SetName(hashed)
 							} else {
 								// StatefulSet or Service (if not headless - wait, pool service IS headless)

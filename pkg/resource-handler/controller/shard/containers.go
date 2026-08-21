@@ -747,7 +747,7 @@ func buildPostgresExporterQueriesVolume(shard *multigresv1alpha1.Shard) corev1.V
 
 func buildPoolVolumes(shard *multigresv1alpha1.Shard, cellName string) []corev1.Volume {
 	volumes := []corev1.Volume{
-		buildSharedBackupVolume(shard, cellName),
+		buildSharedBackupVolume(shard),
 		buildSocketDirVolume(),
 		buildPgHbaVolume(shard.Name),
 		buildPostgresPasswordVolume(shard),
@@ -775,9 +775,9 @@ func buildPoolVolumes(shard *multigresv1alpha1.Shard, cellName string) []corev1.
 }
 
 // buildSharedBackupVolume creates the backup volume for pgbackrest.
-// If type is Filesystem, references the shared PVC (per-cell).
+// If type is Filesystem, references the shared PVC (per-shard).
 // If type is S3 (or nil), uses an emptyDir for local scratch/spool.
-func buildSharedBackupVolume(shard *multigresv1alpha1.Shard, cellName string) corev1.Volume {
+func buildSharedBackupVolume(shard *multigresv1alpha1.Shard) corev1.Volume {
 	// Default to EmptyDir (for S3 or no backup config)
 	source := corev1.VolumeSource{
 		EmptyDir: &corev1.EmptyDirVolumeSource{},
@@ -785,19 +785,9 @@ func buildSharedBackupVolume(shard *multigresv1alpha1.Shard, cellName string) co
 
 	if shard.Spec.Backup != nil &&
 		shard.Spec.Backup.Type == multigresv1alpha1.BackupTypeFilesystem {
-		clusterName := shard.Labels["multigres.com/cluster"]
-		claimName := nameutil.JoinWithConstraints(
-			nameutil.ServiceConstraints,
-			"backup-data",
-			clusterName,
-			string(shard.Spec.DatabaseName),
-			string(shard.Spec.TableGroupName),
-			string(shard.Spec.ShardName),
-			cellName,
-		)
 		source = corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: claimName,
+				ClaimName: BuildSharedBackupPVCName(shard),
 			},
 		}
 	}

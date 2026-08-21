@@ -231,9 +231,6 @@ func (r *ShardReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	// Compute pool cells for shared backup PVCs (only cells with pool pods need backup storage)
-	poolCells := getPoolCells(shard)
-
 	if err := r.validateBackupStorageClassDependency(ctx, shard); err != nil {
 		if isMissingStorageClassDependency(err) {
 			logger.Info(
@@ -296,25 +293,21 @@ func (r *ShardReconciler) Reconcile(
 		childSpan.End()
 	}
 
-	// Reconcile Shared Backup PVCs (one per cell)
+	// Reconcile the shard-wide shared backup PVC.
 	{
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "Shard.ReconcileBackupPVCs")
-		for _, cell := range poolCells {
-			cellName := string(cell)
-			if err := r.reconcileSharedBackupPVC(ctx, shard, cellName); err != nil {
-				monitoring.RecordSpanError(childSpan, err)
-				childSpan.End()
-				logger.Error(err, "Failed to reconcile shared backup PVC", "cell", cellName)
-				r.Recorder.Eventf(
-					shard,
-					"Warning",
-					"FailedApply",
-					"Failed to reconcile shared backup PVC for cell %s: %v",
-					cellName,
-					err,
-				)
-				return ctrl.Result{}, err
-			}
+		if err := r.reconcileSharedBackupPVC(ctx, shard); err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			logger.Error(err, "Failed to reconcile shared backup PVC")
+			r.Recorder.Eventf(
+				shard,
+				"Warning",
+				"FailedApply",
+				"Failed to reconcile shared backup PVC: %v",
+				err,
+			)
+			return ctrl.Result{}, err
 		}
 		childSpan.End()
 	}
@@ -496,26 +489,6 @@ func getMultiorchCells(shard *multigresv1alpha1.Shard) ([]multigresv1alpha1.Cell
 
 	slices.Sort(cells)
 	return cells, nil
-}
-
-// getPoolCells returns the deduplicated, sorted set of cells from all pools.
-// Used for infrastructure that only needs to exist where pool pods run
-// (e.g., shared backup PVCs).
-func getPoolCells(shard *multigresv1alpha1.Shard) []multigresv1alpha1.CellName {
-	cellSet := make(map[multigresv1alpha1.CellName]bool)
-	for _, pool := range shard.Spec.Pools {
-		for _, cell := range pool.Cells {
-			cellSet[cell] = true
-		}
-	}
-
-	cells := make([]multigresv1alpha1.CellName, 0, len(cellSet))
-	for cell := range cellSet {
-		cells = append(cells, cell)
-	}
-
-	slices.Sort(cells)
-	return cells
 }
 
 // ShouldDeletePVCOnShardRemoval returns true when the effective PVCDeletionPolicy

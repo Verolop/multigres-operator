@@ -68,7 +68,7 @@ func buildHashedPoolHeadlessServiceName(
 	)
 }
 
-func buildHashedBackupPVCName(shard *multigresv1alpha1.Shard, cellName string) string {
+func buildHashedBackupPVCName(shard *multigresv1alpha1.Shard) string {
 	clusterName := shard.Labels["multigres.com/cluster"]
 	return name.JoinWithConstraints(
 		name.ServiceConstraints,
@@ -77,7 +77,6 @@ func buildHashedBackupPVCName(shard *multigresv1alpha1.Shard, cellName string) s
 		string(shard.Spec.DatabaseName),
 		string(shard.Spec.TableGroupName),
 		string(shard.Spec.ShardName),
-		cellName,
 	)
 }
 
@@ -92,70 +91,6 @@ func buildHashedMultiorchName(shard *multigresv1alpha1.Shard, cellName string) s
 		"multiorch",
 		cellName,
 	)
-}
-
-func TestGetPoolCells(t *testing.T) {
-	tests := map[string]struct {
-		shard *multigresv1alpha1.Shard
-		want  []multigresv1alpha1.CellName
-	}{
-		"explicit multiorch and pools in different cells": {
-			shard: &multigresv1alpha1.Shard{
-				Spec: multigresv1alpha1.ShardSpec{
-					Multiorch: multigresv1alpha1.MultiorchSpec{
-						Cells: []multigresv1alpha1.CellName{"zone-a"},
-					},
-					Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
-						"pool1": {Cells: []multigresv1alpha1.CellName{"zone-b"}},
-					},
-				},
-			},
-			want: []multigresv1alpha1.CellName{"zone-b"},
-		},
-		"only multiorch": {
-			shard: &multigresv1alpha1.Shard{
-				Spec: multigresv1alpha1.ShardSpec{
-					Multiorch: multigresv1alpha1.MultiorchSpec{
-						Cells: []multigresv1alpha1.CellName{"zone-a"},
-					},
-				},
-			},
-			want: []multigresv1alpha1.CellName{},
-		},
-		"only pools": {
-			shard: &multigresv1alpha1.Shard{
-				Spec: multigresv1alpha1.ShardSpec{
-					Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
-						"pool1": {Cells: []multigresv1alpha1.CellName{"zone-b"}},
-						"pool2": {Cells: []multigresv1alpha1.CellName{"zone-c"}},
-					},
-				},
-			},
-			want: []multigresv1alpha1.CellName{"zone-b", "zone-c"},
-		},
-		"overlapping cells": {
-			shard: &multigresv1alpha1.Shard{
-				Spec: multigresv1alpha1.ShardSpec{
-					Multiorch: multigresv1alpha1.MultiorchSpec{
-						Cells: []multigresv1alpha1.CellName{"zone-a", "zone-b"},
-					},
-					Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
-						"pool1": {Cells: []multigresv1alpha1.CellName{"zone-b", "zone-c"}},
-					},
-				},
-			},
-			want: []multigresv1alpha1.CellName{"zone-b", "zone-c"},
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := getPoolCells(tc.shard)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("getPoolCells() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
 }
 
 func TestSetConditions(t *testing.T) {
@@ -344,7 +279,7 @@ func TestReconcile_InvalidScheme(t *testing.T) {
 				}
 			},
 			reconcileFunc: func(r *ShardReconciler, ctx context.Context, shard *multigresv1alpha1.Shard) error {
-				return r.reconcileSharedBackupPVC(ctx, shard, "cell1")
+				return r.reconcileSharedBackupPVC(ctx, shard)
 			},
 		},
 		"PostgresPasswordSecret": {
@@ -3297,7 +3232,7 @@ func TestReconcileSharedBackupPVC(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shard).Build()
 		r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
-		if err := r.reconcileSharedBackupPVC(context.Background(), shard, "zone1"); err != nil {
+		if err := r.reconcileSharedBackupPVC(context.Background(), shard); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -3318,11 +3253,11 @@ func TestReconcileSharedBackupPVC(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shard).Build()
 		r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
-		if err := r.reconcileSharedBackupPVC(context.Background(), shard, "zone1"); err != nil {
+		if err := r.reconcileSharedBackupPVC(context.Background(), shard); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		pvcName := BuildSharedBackupPVCName(shard, "zone1")
+		pvcName := BuildSharedBackupPVCName(shard)
 		pvc := &corev1.PersistentVolumeClaim{}
 		if err := c.Get(
 			context.Background(),
@@ -3357,7 +3292,7 @@ func TestReconcileSharedBackupPVC(t *testing.T) {
 		})
 		r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
-		err := r.reconcileSharedBackupPVC(context.Background(), shard, "zone1")
+		err := r.reconcileSharedBackupPVC(context.Background(), shard)
 		if err == nil {
 			t.Error("expected error on PVC patch failure")
 		}
@@ -3388,7 +3323,7 @@ func TestBuildSharedBackupPVC_Variants(t *testing.T) {
 			},
 		}
 
-		pvc, err := BuildSharedBackupPVC(shard, "zone1", false, testScheme())
+		pvc, err := BuildSharedBackupPVC(shard, false, testScheme())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -3420,7 +3355,7 @@ func TestBuildSharedBackupPVC_Variants(t *testing.T) {
 			},
 		}
 
-		pvc, err := BuildSharedBackupPVC(shard, "zone1", false, testScheme())
+		pvc, err := BuildSharedBackupPVC(shard, false, testScheme())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -3904,7 +3839,7 @@ func TestBuildSharedBackupPVC_InvalidStorageSize(t *testing.T) {
 	}
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
-	_, err := BuildSharedBackupPVC(shard, "zone1", false, scheme)
+	_, err := BuildSharedBackupPVC(shard, false, scheme)
 	if err == nil {
 		t.Fatal("expected error for invalid storage size")
 	}
@@ -4367,7 +4302,7 @@ func TestReconcileSharedBackupPVC_BuildErrorAndNilReturn(t *testing.T) {
 		}
 		base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shard.DeepCopy()).Build()
 		r := &ShardReconciler{Client: base, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
-		err := r.reconcileSharedBackupPVC(t.Context(), shard, "zone1")
+		err := r.reconcileSharedBackupPVC(t.Context(), shard)
 		if err == nil {
 			t.Fatal("expected error from build failure")
 		}

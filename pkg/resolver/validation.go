@@ -561,21 +561,23 @@ func (r *Resolver) ValidateClusterLogic(
 					}
 
 					if isRWO {
-						for poolName, pool := range pools {
+						poolerMounts := int64(0)
+						for _, pool := range pools {
 							replicas := int32(1)
 							if pool.ReplicasPerCell != nil {
 								replicas = *pool.ReplicasPerCell
 							}
-							if replicas > 1 {
-								warnings = append(warnings, fmt.Sprintf(
-									"Shard '%s' uses filesystem backups with ReadWriteOnce (RWO) storage but pool '%s' has %d replicas per cell. "+
-										"This configuration may fail if pods are scheduled on different nodes. "+
-										"Consider using ReadWriteMany (RWX), ensuring node affinity, or using S3 backups.",
-									shard.Name,
-									poolName,
-									replicas,
-								))
-							}
+							poolerMounts += int64(len(pool.Cells)) * int64(replicas)
+						}
+
+						if poolerMounts > 1 {
+							warnings = append(warnings, fmt.Sprintf(
+								"Shard '%s' uses filesystem backups with ReadWriteOnce (RWO) storage but %d poolers mount the shard-wide backup PVC. "+
+									"This configuration may fail when poolers are scheduled on different nodes. "+
+									"Configure ReadWriteMany (RWX) storage, ensure node affinity, or use S3 backups.",
+								shard.Name,
+								poolerMounts,
+							))
 						}
 					}
 				}
