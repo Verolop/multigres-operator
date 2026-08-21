@@ -67,7 +67,12 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 	claims := &corev1.PersistentVolumeClaimList{}
 	if err := c.List(context.Background(), claims,
 		client.InNamespace(ns),
-		client.MatchingLabels{metadata.LabelMultigresCluster: cr.Name},
+		client.MatchingLabels{
+			metadata.LabelMultigresCluster:    cr.Name,
+			metadata.LabelMultigresDatabase:   string(cr.Spec.Databases[0].Name),
+			metadata.LabelMultigresTableGroup: string(cr.Spec.Databases[0].TableGroups[0].Name),
+			metadata.LabelMultigresShard:      string(cr.Spec.Databases[0].TableGroups[0].Shards[0].Name),
+		},
 	); err != nil {
 		t.Fatalf("list backup PVCs: %v", err)
 	}
