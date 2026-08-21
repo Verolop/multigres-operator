@@ -17,11 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	"github.com/multigres/multigres-operator/test/e2e/framework"
 )
-
-const backupVolumeName = "backup-data"
 
 // TestResourceVerification verifies that the operator creates the expected
 // Kubernetes resources (PDBs, deployments, services) with correct configuration.
@@ -109,7 +108,7 @@ func testMultiCellFilesystemBackup(t *testing.T) {
 	for _, pod := range pods.Items {
 		var mountedClaim string
 		for _, volume := range pod.Spec.Volumes {
-			if volume.Name == backupVolumeName && volume.PersistentVolumeClaim != nil {
+			if volume.Name == shardcontroller.BackupVolumeName && volume.PersistentVolumeClaim != nil {
 				mountedClaim = volume.PersistentVolumeClaim.ClaimName
 				break
 			}
