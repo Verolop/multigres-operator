@@ -20,14 +20,31 @@ const (
 	storageClassDependencyRequeue = 10 * time.Second
 
 	storageClassNotFoundReason     = "StorageClassNotFound"
-	storageClassFoundReason        = "StorageClassFound"
+	storageClassReadyReason        = "StorageClassReady"
 	storageClassNotSpecifiedReason = "StorageClassNotSpecified"
+	storageClassBindingModeReason  = "StorageClassBindingModeInvalid"
 )
 
 // missingStorageClassDependencyError signals a missing StorageClass (requeue calmly,
 // not exponential backoff).
 type missingStorageClassDependencyError struct {
 	className string
+}
+
+// invalidStorageClassBindingModeError signals that a StorageClass can bind a
+// volume before the scheduler selects a zone for its pod.
+type invalidStorageClassBindingModeError struct {
+	className string
+	mode      storagev1.VolumeBindingMode
+}
+
+func (e *invalidStorageClassBindingModeError) Error() string {
+	return fmt.Sprintf(
+		"referenced StorageClass %q uses volumeBindingMode %q; topology-server storage requires %q",
+		e.className,
+		e.mode,
+		storagev1.VolumeBindingWaitForFirstConsumer,
+	)
 }
 
 func (e *missingStorageClassDependencyError) Error() string {
@@ -40,24 +57,33 @@ func isMissingStorageClassDependency(err error) bool {
 	return errors.As(err, &depErr)
 }
 
-// validateStorageClassExists checks if the named StorageClass exists.
-func (r *TopoServerReconciler) validateStorageClassExists(
+func isStorageClassDependencyError(err error) bool {
+	if isMissingStorageClassDependency(err) {
+		return true
+	}
+	var bindingErr *invalidStorageClassBindingModeError
+	return errors.As(err, &bindingErr)
+}
+
+// getStorageClass returns the named StorageClass when it exists.
+func (r *TopoServerReconciler) getStorageClass(
 	ctx context.Context,
 	className string,
-) (bool, error) {
+) (*storagev1.StorageClass, error) {
 	sc := &storagev1.StorageClass{}
 	err := r.Get(ctx, client.ObjectKey{Name: className}, sc)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil
+			return nil, nil
 		}
-		return false, fmt.Errorf("failed to get StorageClass %q: %w", className, err)
+		return nil, fmt.Errorf("failed to get StorageClass %q: %w", className, err)
 	}
-	return true, nil
+	return sc, nil
 }
 
 // validateEtcdStorageClassDependency runs before StatefulSet apply.
-// Empty class passes through, existing class proceeds, missing class requeues.
+// Empty class passes through. An explicit class must exist and delay volume
+// binding until the scheduler has selected a node and availability zone.
 func (r *TopoServerReconciler) validateEtcdStorageClassDependency(
 	ctx context.Context,
 	toposerver *multigresv1alpha1.TopoServer,
@@ -77,11 +103,11 @@ func (r *TopoServerReconciler) validateEtcdStorageClassDependency(
 		)
 	}
 
-	exists, err := r.validateStorageClassExists(ctx, etcdClass)
+	sc, err := r.getStorageClass(ctx, etcdClass)
 	if err != nil {
 		return fmt.Errorf("failed to validate etcd StorageClass %q: %w", etcdClass, err)
 	}
-	if !exists {
+	if sc == nil {
 		msg := fmt.Sprintf("StorageClass %q not found for etcd PVCs", etcdClass)
 		if setErr := r.setStorageClassCondition(
 			ctx,
@@ -96,12 +122,40 @@ func (r *TopoServerReconciler) validateEtcdStorageClassDependency(
 		return &missingStorageClassDependencyError{className: etcdClass}
 	}
 
+	mode := storagev1.VolumeBindingImmediate
+	if sc.VolumeBindingMode != nil {
+		mode = *sc.VolumeBindingMode
+	}
+	if mode != storagev1.VolumeBindingWaitForFirstConsumer {
+		msg := fmt.Sprintf(
+			"StorageClass %q uses volumeBindingMode %q; topology-server storage requires %q",
+			etcdClass,
+			mode,
+			storagev1.VolumeBindingWaitForFirstConsumer,
+		)
+		if setErr := r.setStorageClassCondition(
+			ctx,
+			toposerver,
+			metav1.ConditionFalse,
+			storageClassBindingModeReason,
+			msg,
+		); setErr != nil {
+			return setErr
+		}
+		r.Recorder.Eventf(toposerver, "Warning", storageClassBindingModeReason, msg)
+		return &invalidStorageClassBindingModeError{className: etcdClass, mode: mode}
+	}
+
 	return r.setStorageClassCondition(
 		ctx,
 		toposerver,
 		metav1.ConditionTrue,
-		storageClassFoundReason,
-		fmt.Sprintf("StorageClass %q found for etcd PVCs", etcdClass),
+		storageClassReadyReason,
+		fmt.Sprintf(
+			"StorageClass %q uses volumeBindingMode %q",
+			etcdClass,
+			storagev1.VolumeBindingWaitForFirstConsumer,
+		),
 	)
 }
 
