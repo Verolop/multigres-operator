@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -50,7 +51,7 @@ func TestValidateEtcdStorageClassDependency(t *testing.T) {
 		}
 	})
 
-	t.Run("existing storage class sets True/Found condition", func(t *testing.T) {
+	t.Run("ready storage class sets True/Ready condition", func(t *testing.T) {
 		t.Parallel()
 		ts := &multigresv1alpha1.TopoServer{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ts", Namespace: "default"},
@@ -60,7 +61,10 @@ func TestValidateEtcdStorageClassDependency(t *testing.T) {
 				},
 			},
 		}
-		sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast-ssd"}}
+		sc := &storagev1.StorageClass{
+			ObjectMeta:        metav1.ObjectMeta{Name: "fast-ssd"},
+			VolumeBindingMode: ptr.To(storagev1.VolumeBindingWaitForFirstConsumer),
+		}
 		c := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithObjects(ts, sc).
@@ -78,10 +82,58 @@ func TestValidateEtcdStorageClassDependency(t *testing.T) {
 		}
 		cond := findCondition(updated.Status.Conditions, conditionStorageClassValid)
 		if cond == nil || cond.Status != metav1.ConditionTrue ||
-			cond.Reason != storageClassFoundReason {
+			cond.Reason != storageClassReadyReason {
 			t.Fatalf("unexpected condition: %#v", cond)
 		}
 	})
+
+	t.Run(
+		"immediate binding mode sets False condition and returns dependency error",
+		func(t *testing.T) {
+			t.Parallel()
+			ts := &multigresv1alpha1.TopoServer{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-ts", Namespace: "default"},
+				Spec: multigresv1alpha1.TopoServerSpec{
+					Etcd: &multigresv1alpha1.EtcdSpec{
+						Storage: multigresv1alpha1.StorageSpec{Class: "immediate-sc"},
+					},
+				},
+			}
+			sc := &storagev1.StorageClass{
+				ObjectMeta:        metav1.ObjectMeta{Name: "immediate-sc"},
+				VolumeBindingMode: ptr.To(storagev1.VolumeBindingImmediate),
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(ts, sc).
+				WithStatusSubresource(&multigresv1alpha1.TopoServer{}).
+				Build()
+			r := &TopoServerReconciler{
+				Client:   c,
+				Scheme:   scheme,
+				Recorder: record.NewFakeRecorder(10),
+			}
+
+			err := r.validateEtcdStorageClassDependency(t.Context(), ts)
+			if err == nil || !isStorageClassDependencyError(err) {
+				t.Fatalf("expected StorageClass dependency error, got: %v", err)
+			}
+
+			var updated multigresv1alpha1.TopoServer
+			if getErr := c.Get(
+				t.Context(),
+				client.ObjectKeyFromObject(ts),
+				&updated,
+			); getErr != nil {
+				t.Fatalf("failed to read toposerver: %v", getErr)
+			}
+			cond := findCondition(updated.Status.Conditions, conditionStorageClassValid)
+			if cond == nil || cond.Status != metav1.ConditionFalse ||
+				cond.Reason != storageClassBindingModeReason {
+				t.Fatalf("unexpected condition: %#v", cond)
+			}
+		},
+	)
 
 	t.Run(
 		"missing storage class sets False/NotFound condition and returns dependency error",

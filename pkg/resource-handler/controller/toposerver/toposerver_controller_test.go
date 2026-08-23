@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -28,6 +29,7 @@ func TestTopoServerReconciler_Reconcile(t *testing.T) {
 	_ = multigresv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 
 	tests := map[string]struct {
@@ -56,12 +58,19 @@ func TestTopoServerReconciler_Reconcile(t *testing.T) {
 			existingObjects: []client.Object{},
 			wantRequeue:     true,
 			assertFunc: func(t *testing.T, c client.Client, toposerver *multigresv1alpha1.TopoServer) {
-				// Verify all three resources were created
+				// Verify all workload, disruption, and service resources were created.
 				sts := &appsv1.StatefulSet{}
 				if err := c.Get(t.Context(),
 					types.NamespacedName{Name: "test-toposerver", Namespace: "default"},
 					sts); err != nil {
 					t.Errorf("StatefulSet should exist: %v", err)
+				}
+
+				pdb := &policyv1.PodDisruptionBudget{}
+				if err := c.Get(t.Context(),
+					types.NamespacedName{Name: "test-toposerver", Namespace: "default"},
+					pdb); err != nil {
+					t.Errorf("PodDisruptionBudget should exist: %v", err)
 				}
 
 				headlessSvc := &corev1.Service{}
@@ -197,7 +206,10 @@ func TestTopoServerReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			existingObjects: []client.Object{
-				&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast-ssd"}},
+				&storagev1.StorageClass{
+					ObjectMeta:        metav1.ObjectMeta{Name: "fast-ssd"},
+					VolumeBindingMode: ptr.To(storagev1.VolumeBindingWaitForFirstConsumer),
+				},
 			},
 			wantRequeue: true,
 			assertFunc: func(t *testing.T, c client.Client, toposerver *multigresv1alpha1.TopoServer) {
@@ -206,6 +218,34 @@ func TestTopoServerReconciler_Reconcile(t *testing.T) {
 					types.NamespacedName{Name: "test-existing-sc", Namespace: "default"},
 					sts); err != nil {
 					t.Errorf("StatefulSet should exist when StorageClass is present: %v", err)
+				}
+			},
+		},
+		"immediate StorageClass requeues without creating StatefulSet": {
+			toposerver: &multigresv1alpha1.TopoServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-immediate-sc",
+					Namespace: "default",
+					Labels:    map[string]string{"multigres.com/cluster": "test-cluster"},
+				},
+				Spec: multigresv1alpha1.TopoServerSpec{
+					Etcd: &multigresv1alpha1.EtcdSpec{
+						Storage: multigresv1alpha1.StorageSpec{Class: "immediate-sc"},
+					},
+				},
+			},
+			existingObjects: []client.Object{
+				&storagev1.StorageClass{
+					ObjectMeta:        metav1.ObjectMeta{Name: "immediate-sc"},
+					VolumeBindingMode: ptr.To(storagev1.VolumeBindingImmediate),
+				},
+			},
+			wantRequeue: true,
+			assertFunc: func(t *testing.T, c client.Client, toposerver *multigresv1alpha1.TopoServer) {
+				sts := &appsv1.StatefulSet{}
+				err := c.Get(t.Context(), client.ObjectKeyFromObject(toposerver), sts)
+				if err == nil {
+					t.Error("StatefulSet should not exist with immediate volume binding")
 				}
 			},
 		},
@@ -409,6 +449,7 @@ func TestTopoServerReconciler_ReconcileNotFound(t *testing.T) {
 	_ = multigresv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().
@@ -443,6 +484,7 @@ func TestTopoServerReconciler_UpdateStatus(t *testing.T) {
 	_ = multigresv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 
 	t.Run("all_replicas_ready_status", func(t *testing.T) {
@@ -559,6 +601,7 @@ func TestTopoServerReconciler_FieldOwnershipIsolation(t *testing.T) {
 	_ = multigresv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 
 	t.Run("updateStatus patch contains exactly one condition (Ready)", func(t *testing.T) {
@@ -646,7 +689,10 @@ func TestTopoServerReconciler_FieldOwnershipIsolation(t *testing.T) {
 					},
 				},
 			}
-			sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast-ssd"}}
+			sc := &storagev1.StorageClass{
+				ObjectMeta:        metav1.ObjectMeta{Name: "fast-ssd"},
+				VolumeBindingMode: ptr.To(storagev1.VolumeBindingWaitForFirstConsumer),
+			}
 
 			baseClient := fake.NewClientBuilder().
 				WithScheme(scheme).
@@ -687,7 +733,7 @@ func TestTopoServerReconciler_FieldOwnershipIsolation(t *testing.T) {
 			if scCond.Type != conditionStorageClassValid {
 				t.Fatalf("expected %s condition, got %s", conditionStorageClassValid, scCond.Type)
 			}
-			if scCond.Status != metav1.ConditionTrue || scCond.Reason != storageClassFoundReason {
+			if scCond.Status != metav1.ConditionTrue || scCond.Reason != storageClassReadyReason {
 				t.Fatalf("unexpected condition: status=%s reason=%s", scCond.Status, scCond.Reason)
 			}
 
@@ -722,6 +768,7 @@ func TestTopoServerReconciler_StandaloneMocks(t *testing.T) {
 	_ = multigresv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
 	_ = storagev1.AddToScheme(scheme)
 
 	t.Run("ignore_deleted", func(t *testing.T) {

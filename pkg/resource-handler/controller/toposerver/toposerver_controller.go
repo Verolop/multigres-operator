@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,8 +79,8 @@ func (r *TopoServerReconciler) Reconcile(
 
 	// Validate StorageClass dependency before StatefulSet apply
 	if err := r.validateEtcdStorageClassDependency(ctx, toposerver); err != nil {
-		if isMissingStorageClassDependency(err) {
-			logger.Info("StorageClass dependency missing; requeueing",
+		if isStorageClassDependencyError(err) {
+			logger.Info("StorageClass dependency is not ready; requeueing",
 				"after", storageClassDependencyRequeue)
 			return ctrl.Result{RequeueAfter: storageClassDependencyRequeue}, nil
 		}
@@ -100,6 +101,25 @@ func (r *TopoServerReconciler) Reconcile(
 				"Warning",
 				"FailedApply",
 				"Failed to reconcile StatefulSet: %v",
+				err,
+			)
+			return ctrl.Result{}, err
+		}
+		childSpan.End()
+	}
+
+	// Reconcile PodDisruptionBudget
+	{
+		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcilePodDisruptionBudget")
+		if err := r.reconcilePodDisruptionBudget(ctx, toposerver); err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			logger.Error(err, "Failed to reconcile PodDisruptionBudget")
+			r.Recorder.Eventf(
+				toposerver,
+				"Warning",
+				"FailedApply",
+				"Failed to reconcile PodDisruptionBudget: %v",
 				err,
 			)
 			return ctrl.Result{}, err
@@ -171,6 +191,39 @@ func (r *TopoServerReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: statusRecheckDelay}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// reconcilePodDisruptionBudget creates or updates the disruption budget for TopoServer.
+func (r *TopoServerReconciler) reconcilePodDisruptionBudget(
+	ctx context.Context,
+	toposerver *multigresv1alpha1.TopoServer,
+) error {
+	desired, err := BuildPodDisruptionBudget(toposerver, r.Scheme)
+	if err != nil {
+		return fmt.Errorf("failed to build PodDisruptionBudget: %w", err)
+	}
+
+	desired.SetGroupVersionKind(policyv1.SchemeGroupVersion.WithKind("PodDisruptionBudget"))
+	if err := r.Patch(
+		ctx,
+		desired,
+		client.Apply,
+		client.ForceOwnership,
+		client.FieldOwner("multigres-operator"),
+	); err != nil {
+		return fmt.Errorf("failed to apply PodDisruptionBudget: %w", err)
+	}
+
+	r.Recorder.Eventf(
+		toposerver,
+		"Normal",
+		"Applied",
+		"Applied %s %s",
+		desired.GroupVersionKind().Kind,
+		desired.Name,
+	)
+
+	return nil
 }
 
 // reconcileStatefulSet creates or updates the StatefulSet for TopoServer.
@@ -439,6 +492,7 @@ func (r *TopoServerReconciler) SetupWithManager(
 		)).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		WithOptions(controllerOpts).
 		Complete(r)
 }
