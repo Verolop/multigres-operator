@@ -165,7 +165,10 @@ func (c *InternalTLSConfig) IsEnabled() bool {
 // An enabled configuration has to name its issuer. Every certificate the
 // issuer signs is a candidate topology client, so the CA that backs topology
 // access is a deliberate choice and not one worth inheriting by default.
-// +kubebuilder:validation:XValidation:rule="!has(self.enabled) || !self.enabled || (has(self.issuerName) && self.issuerName != ”)",message="issuerName is required when topology TLS is enabled"
+//
+// The emptiness check is size based because gofmt rewrites a doubled
+// apostrophe in a doc comment into a typographic quote, which CEL rejects.
+// +kubebuilder:validation:XValidation:rule="!has(self.enabled) || !self.enabled || (has(self.issuerName) && size(self.issuerName) > 0)",message="issuerName is required when topology TLS is enabled"
 type TopoTLSConfig struct {
 	// Enabled controls whether the operator issues topology TLS certificates.
 	// Default: false (nil or empty means disabled).
