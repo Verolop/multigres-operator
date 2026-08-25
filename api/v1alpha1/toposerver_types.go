@@ -58,6 +58,11 @@ type TopoServerSpec struct {
 	// Placement defines optional scheduling settings for the etcd pods.
 	// +optional
 	Placement *TopoServerPlacementSpec `json:"placement,omitempty"`
+
+	// TLS controls whether the controller issues a serving certificate for
+	// this topology server. Inherited from MultigresCluster.
+	// +optional
+	TLS *TopoTLSConfig `json:"tls,omitempty"`
 }
 
 // ============================================================================
@@ -221,6 +226,20 @@ type GlobalTopoServerRef struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	Implementation string `json:"implementation"`
+
+	// CASecret is the name of the Secret holding the CA bundle that verifies
+	// the topology server's certificate. Empty when the topology connection
+	// carries no TLS material.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	CASecret string `json:"caSecret,omitempty"`
+
+	// ClientCertSecret is the name of the Secret holding the certificate and
+	// key this cluster presents to the topology server. Empty when the
+	// topology connection carries no TLS material.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	ClientCertSecret string `json:"clientCertSecret,omitempty"`
 }
 
 // ============================================================================

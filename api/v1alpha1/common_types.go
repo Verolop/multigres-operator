@@ -159,6 +159,37 @@ func (c *InternalTLSConfig) IsEnabled() bool {
 	return c != nil && c.Enabled != nil && *c.Enabled
 }
 
+// TopoTLSConfig controls the TLS credentials the operator issues for the
+// topology server and for the clients that connect to it.
+//
+// An enabled configuration has to name its issuer. Every certificate the
+// issuer signs is a candidate topology client, so the CA that backs topology
+// access is a deliberate choice and not one worth inheriting by default.
+// +kubebuilder:validation:XValidation:rule="!has(self.enabled) || !self.enabled || (has(self.issuerName) && self.issuerName != ”)",message="issuerName is required when topology TLS is enabled"
+type TopoTLSConfig struct {
+	// Enabled controls whether the operator issues topology TLS certificates.
+	// Default: false (nil or empty means disabled).
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// IssuerName is the cert-manager ClusterIssuer that signs both the
+	// topology server's certificate and each cluster's topology client
+	// credential. The two have to chain to the same CA for the server to
+	// accept the client. One topology server can back several Multigres
+	// clusters, so this issuer is infrastructure-level and separate from the
+	// issuer a single cluster uses for its own certificates. Required when
+	// Enabled is true.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	IssuerName string `json:"issuerName,omitempty"`
+}
+
+// IsEnabled reports whether topology TLS certificate issuance is enabled. It
+// is safe to call on a nil receiver.
+func (c *TopoTLSConfig) IsEnabled() bool {
+	return c != nil && c.Enabled != nil && *c.Enabled
+}
+
 // ContainerConfig defines generic container configuration.
 type ContainerConfig struct {
 	// Resources defines the compute resource requirements.
@@ -349,6 +380,39 @@ func ComponentCertCommonName(component, clusterName, namespace string) string {
 		return ""
 	}
 	return component + "." + clusterName + "." + namespace + "." + InternalTLSIdentityDomain
+}
+
+// TopoServerCertName returns the cert-manager Certificate name for a topology
+// server's own serving certificate.
+func TopoServerCertName(toposerverName string) string {
+	if toposerverName == "" {
+		return ""
+	}
+	return toposerverName + "-topo-server-tls"
+}
+
+// TopoServerCertSecretName returns the Secret name cert-manager writes the
+// topology server's serving certificate into. By convention it matches the
+// Certificate name.
+func TopoServerCertSecretName(toposerverName string) string {
+	return TopoServerCertName(toposerverName)
+}
+
+// TopoClientCertName returns the cert-manager Certificate name for the client
+// credential a Multigres cluster presents to its topology server.
+func TopoClientCertName(clusterName string) string {
+	if clusterName == "" {
+		return ""
+	}
+	return clusterName + "-topo-client-tls"
+}
+
+// TopoClientCertSecretName returns the Secret name cert-manager writes the
+// topology client credential into. cert-manager stores ca.crt alongside
+// tls.crt and tls.key, so this one Secret is both the client keypair and the
+// CA bundle that verifies the topology server.
+func TopoClientCertSecretName(clusterName string) string {
+	return TopoClientCertName(clusterName)
 }
 
 // ============================================================================

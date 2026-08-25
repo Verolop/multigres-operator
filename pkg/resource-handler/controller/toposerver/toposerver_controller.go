@@ -165,6 +165,25 @@ func (r *TopoServerReconciler) Reconcile(
 		childSpan.End()
 	}
 
+	// Reconcile serving Certificate
+	{
+		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcileCertificate")
+		if err := r.reconcileCertificate(ctx, toposerver); err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			logger.Error(err, "Failed to reconcile serving Certificate")
+			r.Recorder.Eventf(
+				toposerver,
+				"Warning",
+				"FailedApply",
+				"Failed to reconcile serving Certificate: %v",
+				err,
+			)
+			return ctrl.Result{}, err
+		}
+		childSpan.End()
+	}
+
 	// Update status
 	{
 		_, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.UpdateStatus")

@@ -2,45 +2,35 @@ package multigrescluster
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/topology"
+	"github.com/multigres/multigres-operator/pkg/util/certs"
 )
 
 const (
-	// CertIssuerName is the cert-manager ClusterIssuer used for TLS certificates.
-	CertIssuerName = "supabase-issuer"
+	// CertIssuerName is the cert-manager ClusterIssuer used for TLS
+	// certificates when the cluster does not name one.
+	CertIssuerName = certs.DefaultIssuerName
 
 	// CertDuration is the certificate duration (5 years), matching non-HA projects.
-	CertDuration = "44640h0m0s"
+	CertDuration = certs.Duration
 
 	// CertLiteralSubjectTemplate is the literal subject template for certificates.
 	// The CN placeholder is replaced with the certCommonName.
-	CertLiteralSubjectTemplate = "C=US, ST=Delware, L=New Castle,O=Supabase Inc, CN=%s"
+	CertLiteralSubjectTemplate = certs.LiteralSubjectTemplate
 )
 
-var certGVK = schema.GroupVersionKind{
-	Group:   "cert-manager.io",
-	Version: "v1",
-	Kind:    "Certificate",
-}
+var certGVK = certs.GVK
+
+// maxCommonNameBytes is the X.509 upper bound for the CN attribute
+// (RFC 5280 ub-common-name). cert-manager's webhook rejects longer CNs.
+const maxCommonNameBytes = certs.MaxCommonNameBytes
 
 type certSpec struct {
 	name       string
@@ -95,7 +85,7 @@ func buildInternalCertificates(
 		multigresv1alpha1.ComponentMultiOrchTLS,
 		multigresv1alpha1.ComponentMultiPoolerTLS,
 	}
-	certs := make([]*unstructured.Unstructured, 0, len(components))
+	built := make([]*unstructured.Unstructured, 0, len(components))
 	for _, component := range components {
 		cn := multigresv1alpha1.ComponentCertCommonName(
 			component,
@@ -132,9 +122,53 @@ func buildInternalCertificates(
 		if err != nil {
 			return nil, err
 		}
-		certs = append(certs, cert)
+		built = append(built, cert)
 	}
-	return certs, nil
+	return built, nil
+}
+
+// buildTopoClientCertificate constructs the client credential this cluster
+// presents to the topology server.
+//
+// The CN is the cluster's topology root, so the identity the cluster proves
+// and the key prefix it is entitled to are the same string and cannot drift
+// apart. A root longer than the X.509 CN limit is rejected rather than
+// truncated, because a truncated identity no longer names the prefix it is
+// meant to authorize.
+//
+// The issuer is the topology CA, not the cluster's own issuer: the credential
+// is only useful if it chains to a CA the topology server trusts.
+func buildTopoClientCertificate(
+	cluster *multigresv1alpha1.MultigresCluster,
+	scheme *runtime.Scheme,
+) (*unstructured.Unstructured, error) {
+	roots, err := topology.NewRoots(cluster.Annotations, cluster.Namespace, cluster.Name)
+	if err != nil {
+		return nil, fmt.Errorf("deriving topology root for client certificate: %w", err)
+	}
+
+	commonName := roots.ClusterRoot()
+	if len(commonName) > certs.MaxCommonNameBytes {
+		return nil, fmt.Errorf(
+			"topology root %q is %d bytes, over the %d byte certificate common name limit",
+			commonName, len(commonName), certs.MaxCommonNameBytes,
+		)
+	}
+
+	return certs.Build(cluster, scheme, certs.Spec{
+		Name:       multigresv1alpha1.TopoClientCertName(cluster.Name),
+		SecretName: multigresv1alpha1.TopoClientCertSecretName(cluster.Name),
+		CommonName: commonName,
+		// A client credential is verified by its subject, not by name, so it
+		// carries no SANs.
+		DNSNames: []any{},
+		Usages: []any{
+			"digital signature",
+			"key encipherment",
+			"client auth",
+		},
+		IssuerName: cluster.Spec.TopoTLS.IssuerName,
+	})
 }
 
 // issuerName returns the cluster's configured cert-manager ClusterIssuer
@@ -146,20 +180,11 @@ func issuerName(cluster *multigresv1alpha1.MultigresCluster) string {
 	return CertIssuerName
 }
 
-// maxCommonNameBytes is the X.509 upper bound for the CN attribute
-// (RFC 5280 ub-common-name). cert-manager's webhook rejects longer CNs.
-const maxCommonNameBytes = 64
-
 // truncateCommonName returns cn unchanged when it fits the X.509 CN limit.
 // Longer values are truncated and given a deterministic hash suffix so the
 // result stays unique per identity and stable across reconciles.
 func truncateCommonName(cn string) string {
-	if len(cn) <= maxCommonNameBytes {
-		return cn
-	}
-	sum := sha256.Sum256([]byte(cn))
-	suffix := "-" + hex.EncodeToString(sum[:4])
-	return cn[:maxCommonNameBytes-len(suffix)] + suffix
+	return certs.TruncateCommonName(cn)
 }
 
 func buildCertificateFromSpec(
@@ -167,43 +192,22 @@ func buildCertificateFromSpec(
 	scheme *runtime.Scheme,
 	spec certSpec,
 ) (*unstructured.Unstructured, error) {
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(certGVK)
-	cert.SetName(spec.name)
-	cert.SetNamespace(cluster.Namespace)
-
-	if err := ctrl.SetControllerReference(cluster, cert, scheme); err != nil {
-		return nil, fmt.Errorf("failed to set controller reference: %w", err)
-	}
-
-	cert.Object["spec"] = map[string]any{
-		"secretName": spec.secretName,
-		"dnsNames":   spec.dnsNames,
-		"duration":   CertDuration,
-		"literalSubject": fmt.Sprintf(
-			CertLiteralSubjectTemplate,
-			truncateCommonName(spec.commonName),
-		),
-		"issuerRef": map[string]any{
-			"name":  issuerName(cluster),
-			"kind":  "ClusterIssuer",
-			"group": "cert-manager.io",
-		},
-		"privateKey": map[string]any{
-			"algorithm": "RSA",
-			"size":      int64(2048),
-		},
-		"usages": spec.usages,
-	}
-
-	return cert, nil
+	return certs.Build(cluster, scheme, certs.Spec{
+		Name:       spec.name,
+		SecretName: spec.secretName,
+		CommonName: spec.commonName,
+		DNSNames:   spec.dnsNames,
+		Usages:     spec.usages,
+		IssuerName: issuerName(cluster),
+	})
 }
 
 // reconcileCertificate ensures the cert-manager Certificates match the
 // cluster spec: the internal component certificates when internal mTLS is
-// enabled, and the public multigateway certificate when CertCommonName is
-// set. Certificates no longer desired are deleted along with their generated
-// secrets, so disabling either feature is deterministic.
+// enabled, the topology client credential when topology TLS is enabled, and
+// the public multigateway certificate when CertCommonName is set.
+// Certificates no longer desired are deleted along with their generated
+// secrets, so disabling any of these is deterministic.
 func (r *MultigresClusterReconciler) reconcileCertificate(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
@@ -213,13 +217,22 @@ func (r *MultigresClusterReconciler) reconcileCertificate(
 		return err
 	}
 
-	desiredCerts := make([]*unstructured.Unstructured, 0, 5)
+	desiredCerts := make([]*unstructured.Unstructured, 0, 6)
 	if cluster.Spec.InternalTLS.IsEnabled() {
 		internalCerts, err := buildInternalCertificates(cluster, r.Scheme)
 		if err != nil {
 			return fmt.Errorf("failed to build internal cert-manager Certificates: %w", err)
 		}
 		desiredCerts = append(desiredCerts, internalCerts...)
+	}
+	if cluster.Spec.TopoTLS.IsEnabled() {
+		topoClientCert, err := buildTopoClientCertificate(cluster, r.Scheme)
+		if err != nil {
+			return fmt.Errorf(
+				"failed to build topology client cert-manager Certificate: %w", err,
+			)
+		}
+		desiredCerts = append(desiredCerts, topoClientCert)
 	}
 	if cluster.Spec.CertCommonName != "" {
 		publicCert, err := buildCertificate(cluster, r.Scheme)
@@ -231,16 +244,7 @@ func (r *MultigresClusterReconciler) reconcileCertificate(
 		desiredCerts = append(desiredCerts, publicCert)
 	}
 
-	keepNames := make(map[string]struct{}, len(desiredCerts))
-	keepSecretNames := make(map[string]struct{}, len(desiredCerts))
-	for _, cert := range desiredCerts {
-		keepNames[cert.GetName()] = struct{}{}
-		if secretName, _, _ := unstructured.NestedString(
-			cert.Object, "spec", "secretName",
-		); secretName != "" {
-			keepSecretNames[secretName] = struct{}{}
-		}
-	}
+	keepNames, keepSecretNames := certs.KeepSets(desiredCerts)
 
 	if err := r.deleteOwnedCertificates(
 		ctx, cluster, certList, keepNames, keepSecretNames,
@@ -248,29 +252,7 @@ func (r *MultigresClusterReconciler) reconcileCertificate(
 		return err
 	}
 
-	for _, cert := range desiredCerts {
-		// Skip the Patch entirely when the live spec already matches the
-		// desired spec, so a no-op reconcile doesn't churn resourceVersion.
-		if existing := findCertificateByName(certList, cert.GetName()); existing != nil &&
-			isOwnedBy(existing, cluster) &&
-			apiequality.Semantic.DeepEqual(existing.Object["spec"], cert.Object["spec"]) {
-			continue
-		}
-		if err := r.Patch(
-			ctx,
-			cert,
-			client.Apply,
-			client.ForceOwnership,
-			client.FieldOwner("multigres-operator"),
-		); err != nil {
-			return fmt.Errorf(
-				"failed to apply cert-manager Certificate %q: %w",
-				cert.GetName(),
-				err,
-			)
-		}
-	}
-	return nil
+	return certs.Apply(ctx, r.Client, certList, cluster.UID, desiredCerts)
 }
 
 // listCertificates lists cert-manager Certificates owned by this cluster's
@@ -281,35 +263,7 @@ func (r *MultigresClusterReconciler) listCertificates(
 	ctx context.Context,
 	cluster *multigresv1alpha1.MultigresCluster,
 ) (*unstructured.UnstructuredList, error) {
-	certList := &unstructured.UnstructuredList{}
-	certList.SetGroupVersionKind(certGVK)
-	if err := r.List(
-		ctx,
-		certList,
-		client.InNamespace(cluster.Namespace),
-	); err != nil {
-		if apierrors.IsNotFound(err) || isNoMatchError(err) {
-			return certList, nil
-		}
-		return nil, fmt.Errorf(
-			"failed to list cert-manager Certificates: %w", err,
-		)
-	}
-	return certList, nil
-}
-
-// findCertificateByName returns the Certificate named name from certList, or
-// nil if it is not present.
-func findCertificateByName(
-	certList *unstructured.UnstructuredList,
-	name string,
-) *unstructured.Unstructured {
-	for i := range certList.Items {
-		if certList.Items[i].GetName() == name {
-			return &certList.Items[i]
-		}
-	}
-	return nil
+	return certs.List(ctx, r.Client, cluster.Namespace)
 }
 
 // deleteOwnedCertificates removes cert-manager Certificates owned by this
@@ -323,72 +277,8 @@ func (r *MultigresClusterReconciler) deleteOwnedCertificates(
 	keepNames map[string]struct{},
 	keepSecretNames map[string]struct{},
 ) error {
-	logger := log.FromContext(ctx)
-
-	for i := range certList.Items {
-		cert := &certList.Items[i]
-		if !isOwnedBy(cert, cluster) {
-			continue
-		}
-		if keepNames != nil {
-			if _, ok := keepNames[cert.GetName()]; ok {
-				continue
-			}
-		}
-		// Delete the generated secret first. If this operation fails, keeping
-		// the certificate makes the Secret discoverable on the next reconcile
-		// so cleanup can be retried instead of leaving private key material
-		// permanently orphaned.
-		secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
-		_, keepSecret := keepSecretNames[secretName]
-		if secretName != "" && !keepSecret {
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      secretName,
-					Namespace: cluster.Namespace,
-				},
-			}
-			if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf(
-					"failed to delete generated TLS Secret %q: %w",
-					secretName, err,
-				)
-			}
-		}
-
-		if err := r.Delete(ctx, cert); err != nil &&
-			!apierrors.IsNotFound(err) {
-			return fmt.Errorf(
-				"failed to delete cert-manager Certificate %q: %w",
-				cert.GetName(), err,
-			)
-		}
-		logger.Info(
-			"Deleted stale TLS Certificate",
-			"certificate", cert.GetName(),
-		)
-	}
-
-	return nil
-}
-
-// isOwnedBy checks whether an unstructured object has an ownerReference
-// pointing to the given cluster.
-func isOwnedBy(
-	obj *unstructured.Unstructured,
-	cluster *multigresv1alpha1.MultigresCluster,
-) bool {
-	for _, ref := range obj.GetOwnerReferences() {
-		if ref.UID == cluster.UID {
-			return true
-		}
-	}
-	return false
-}
-
-// isNoMatchError returns true when the API server has no resource mapping
-// for the requested GVK (e.g. cert-manager CRD not installed).
-func isNoMatchError(err error) bool {
-	noMatch := &apimeta.NoKindMatchError{}
-	return errors.As(err, &noMatch)
+	return certs.Prune(
+		ctx, r.Client, cluster.Namespace, cluster.UID,
+		certList, keepNames, keepSecretNames,
+	)
 }

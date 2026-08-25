@@ -79,6 +79,7 @@ func BuildGlobalTopoServer(
 				RootPath:  spec.Etcd.RootPath,
 			},
 			PVCDeletionPolicy: finalPolicy,
+			TLS:               cluster.Spec.TopoTLS.DeepCopy(),
 			Placement:         spec.Placement,
 		},
 	}
