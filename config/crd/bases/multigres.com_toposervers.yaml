@@ -1380,7 +1380,7 @@ spec:
                 x-kubernetes-validations:
                 - message: issuerName is required when topology TLS is enabled
                   rule: '!has(self.enabled) || !self.enabled || (has(self.issuerName)
-                    && self.issuerName != ”)'
+                    && size(self.issuerName) > 0)'
             type: object
             x-kubernetes-validations:
             - message: must specify 'etcd' configuration

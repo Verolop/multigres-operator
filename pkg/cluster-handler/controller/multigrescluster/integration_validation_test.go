@@ -9,6 +9,7 @@ import (
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestMultigresCluster_Validation(t *testing.T) {
@@ -76,6 +77,62 @@ func TestMultigresCluster_Validation(t *testing.T) {
 		// Expect MaxItems=1 or system database rule violation
 		if !strings.Contains(err.Error(), "Invalid value") && !strings.Contains(err.Error(), "only the single system database") {
 			t.Errorf("Expected validation error regarding DB count/rules, got: %v", err)
+		}
+	})
+
+	// Topology access is only as narrow as the CA that backs it, so an enabled
+	// configuration has to name its issuer rather than inherit one.
+	t.Run("Topology TLS Without Issuer (Should Fail)", func(t *testing.T) {
+		t.Parallel()
+		k8sClient, _ := setupIntegration(t)
+		cluster := &multigresv1alpha1.MultigresCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "fail-topo-tls", Namespace: testNamespace},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				TopoTLS: &multigresv1alpha1.TopoTLSConfig{Enabled: ptr.To(true)},
+			},
+		}
+		setTestPostgresPasswordSecretRef(cluster)
+		err := k8sClient.Create(t.Context(), cluster)
+		if err == nil {
+			t.Fatal("Expected error creating cluster with topology TLS and no issuer, got nil")
+		}
+		if !strings.Contains(err.Error(), "issuerName is required when topology TLS is enabled") {
+			t.Errorf("Expected CEL validation error, got: %v", err)
+		}
+	})
+
+	t.Run("Topology TLS With Issuer (Should Pass)", func(t *testing.T) {
+		t.Parallel()
+		k8sClient, _ := setupIntegration(t)
+		cluster := &multigresv1alpha1.MultigresCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "pass-topo-tls", Namespace: testNamespace},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				TopoTLS: &multigresv1alpha1.TopoTLSConfig{
+					Enabled:    ptr.To(true),
+					IssuerName: "multigres-infra-issuer",
+				},
+			},
+		}
+		setTestPostgresPasswordSecretRef(cluster)
+		if err := k8sClient.Create(t.Context(), cluster); err != nil {
+			t.Fatalf("Expected cluster with topology TLS and an issuer to be accepted, got: %v", err)
+		}
+	})
+
+	// Disabled and absent configurations stay valid without an issuer, so the
+	// rule cannot break clusters that never opt in.
+	t.Run("Topology TLS Disabled Without Issuer (Should Pass)", func(t *testing.T) {
+		t.Parallel()
+		k8sClient, _ := setupIntegration(t)
+		cluster := &multigresv1alpha1.MultigresCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "pass-topo-tls-off", Namespace: testNamespace},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				TopoTLS: &multigresv1alpha1.TopoTLSConfig{Enabled: ptr.To(false)},
+			},
+		}
+		setTestPostgresPasswordSecretRef(cluster)
+		if err := k8sClient.Create(t.Context(), cluster); err != nil {
+			t.Fatalf("Expected cluster with topology TLS disabled to be accepted, got: %v", err)
 		}
 	})
 }
