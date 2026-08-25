@@ -40,6 +40,22 @@ func NewRoots(annotations map[string]string, namespace, clusterName string) (Roo
 	return Roots{clusterRoot: rootPrefix + "/" + encodedNamespace + "/" + encodedClusterName}, nil
 }
 
+// ClusterRoot returns the prefix that encloses every topology record this
+// cluster owns. Credentials that authorize a cluster against a shared
+// topology server carry this exact string, so the identity presented and the
+// keys reachable under it stay the same value.
+func (r Roots) ClusterRoot() string {
+	return r.clusterRoot
+}
+
+// KeyPrefix returns the range that encloses this cluster's records, including
+// the trailing separator. Authorization has to grant on this rather than on
+// ClusterRoot: cluster identity "proj_123" is a string prefix of "proj_1234",
+// so a range opened at the bare root would reach a sibling cluster's keys.
+func (r Roots) KeyPrefix() string {
+	return r.clusterRoot + "/"
+}
+
 // Global returns the root for cluster-global topology records.
 func (r Roots) Global() string {
 	return r.clusterRoot + "/global"

@@ -210,6 +210,20 @@ spec:
                     maxLength: 512
                     minLength: 1
                     type: string
+                  caSecret:
+                    description: |-
+                      CASecret is the name of the Secret holding the CA bundle that verifies
+                      the topology server's certificate. Empty when the topology connection
+                      carries no TLS material.
+                    maxLength: 253
+                    type: string
+                  clientCertSecret:
+                    description: |-
+                      ClientCertSecret is the name of the Secret holding the certificate and
+                      key this cluster presents to the topology server. Empty when the
+                      topology connection carries no TLS material.
+                    maxLength: 253
+                    type: string
                   implementation:
                     description: Implementation defines the client implementation
                       (e.g. "etcd").

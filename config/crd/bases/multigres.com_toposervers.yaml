@@ -1355,6 +1355,32 @@ spec:
                     - Delete
                     type: string
                 type: object
+              tls:
+                description: |-
+                  TLS controls whether the controller issues a serving certificate for
+                  this topology server. Inherited from MultigresCluster.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled controls whether the operator issues topology TLS certificates.
+                      Default: false (nil or empty means disabled).
+                    type: boolean
+                  issuerName:
+                    description: |-
+                      IssuerName is the cert-manager ClusterIssuer that signs both the
+                      topology server's certificate and each cluster's topology client
+                      credential. The two have to chain to the same CA for the server to
+                      accept the client. One topology server can back several Multigres
+                      clusters, so this issuer is infrastructure-level and separate from the
+                      issuer a single cluster uses for its own certificates. Required when
+                      Enabled is true.
+                    maxLength: 253
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: issuerName is required when topology TLS is enabled
+                  rule: '!has(self.enabled) || !self.enabled || (has(self.issuerName)
+                    && self.issuerName != ”)'
             type: object
             x-kubernetes-validations:
             - message: must specify 'etcd' configuration

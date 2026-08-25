@@ -181,6 +181,12 @@ type MultigresClusterSpec struct {
 	// created by this cluster. When empty, defaults to the Supabase issuer.
 	// +optional
 	IssuerName string `json:"issuerName,omitempty"`
+
+	// TopoTLS controls whether the operator issues TLS credentials for the
+	// topology server and for this cluster's topology client. Issuing the
+	// credentials does not by itself make the topology server require them.
+	// +optional
+	TopoTLS *TopoTLSConfig `json:"topoTLS,omitempty"`
 }
 
 // ============================================================================
