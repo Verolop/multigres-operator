@@ -308,9 +308,10 @@ func ApplyOne(ctx context.Context, c client.Client, cert *unstructured.Unstructu
 	return nil
 }
 
-// Apply server-side applies each desired Certificate. A Certificate whose live
-// spec already matches is skipped so a no-op reconcile does not churn
-// resourceVersion.
+// Apply server-side applies each desired Certificate. A same-named Certificate
+// owned by another resource produces an error rather than being adopted. A
+// Certificate whose live spec already matches is skipped so a no-op reconcile
+// does not churn resourceVersion.
 func Apply(
 	ctx context.Context,
 	c client.Client,
@@ -319,10 +320,17 @@ func Apply(
 	desired []*unstructured.Unstructured,
 ) error {
 	for _, cert := range desired {
-		if existing := FindByName(certList, cert.GetName()); existing != nil &&
-			OwnedBy(existing, ownerUID) &&
-			SpecEqual(existing, cert) {
-			continue
+		if existing := FindByName(certList, cert.GetName()); existing != nil {
+			if !OwnedBy(existing, ownerUID) {
+				return fmt.Errorf(
+					"cert-manager Certificate %q in namespace %q already exists and is not owned by the reconciled resource",
+					existing.GetName(),
+					existing.GetNamespace(),
+				)
+			}
+			if SpecEqual(existing, cert) {
+				continue
+			}
 		}
 		if err := ApplyOne(ctx, c, cert); err != nil {
 			return err

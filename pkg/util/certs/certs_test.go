@@ -257,6 +257,48 @@ func TestApplySkipsUnchangedCertificates(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsForeignCertificate(t *testing.T) {
+	existing := certFixture(t, "a", "a-secret")
+	existing.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: "example.com/v1",
+		Kind:       "Other",
+		Name:       "other",
+		UID:        "other-uid",
+	}})
+	c := fakeClient(t, existing)
+
+	certList, err := List(context.Background(), c, "supabase")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	before := certList.Items[0].DeepCopy()
+
+	desired := certFixture(t, "a", "a-secret")
+	err = Apply(
+		context.Background(), c, certList, "owner-uid",
+		[]*unstructured.Unstructured{desired},
+	)
+	if err == nil {
+		t.Fatal("Apply() error = nil, want collision error")
+	}
+	if !strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "supabase") {
+		t.Errorf("Apply() error = %q, want namespace and name", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(GVK)
+	if err := c.Get(
+		context.Background(),
+		client.ObjectKey{Namespace: "supabase", Name: "a"},
+		got,
+	); err != nil {
+		t.Fatalf("foreign Certificate was modified or deleted: %v", err)
+	}
+	if diff := cmp.Diff(before.Object, got.Object); diff != "" {
+		t.Errorf("foreign Certificate changed (-want +got):\n%s", diff)
+	}
+}
+
 func TestApplyCreatesMissingCertificates(t *testing.T) {
 	c := fakeClient(t)
 
