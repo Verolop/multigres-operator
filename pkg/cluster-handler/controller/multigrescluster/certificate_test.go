@@ -967,7 +967,7 @@ func TestReconcileCertificate(t *testing.T) {
 	})
 
 	t.Run(
-		"re-applies a Certificate with matching spec but no ownerRef",
+		"reports a collision for a Certificate with matching spec but no ownerRef",
 		func(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(scheme).Build()
 			r := &MultigresClusterReconciler{
@@ -1003,8 +1003,8 @@ func TestReconcileCertificate(t *testing.T) {
 				t.Fatalf("failed to create unowned cert: %v", err)
 			}
 
-			if err := r.reconcileCertificate(t.Context(), cluster); err != nil {
-				t.Fatalf("reconcile: %v", err)
+			if err := r.reconcileCertificate(t.Context(), cluster); err == nil {
+				t.Fatal("reconcile: got nil error, want collision error")
 			}
 
 			got := &unstructured.Unstructured{}
@@ -1014,8 +1014,8 @@ func TestReconcileCertificate(t *testing.T) {
 			}, got); err != nil {
 				t.Fatalf("Certificate should exist: %v", err)
 			}
-			if len(got.GetOwnerReferences()) == 0 {
-				t.Error("Certificate should have been re-applied with an ownerRef")
+			if len(got.GetOwnerReferences()) != 0 {
+				t.Error("foreign Certificate should not be adopted")
 			}
 		},
 	)

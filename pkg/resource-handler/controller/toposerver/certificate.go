@@ -92,17 +92,21 @@ func (r *TopoServerReconciler) reconcileCertificate(
 	if err != nil {
 		return err
 	}
-	// Only ever touch a Certificate this TopoServer owns, so a same-named
-	// object belonging to something else is left alone.
-	if existing != nil && !certs.OwnedBy(existing, toposerver.UID) {
-		existing = nil
-	}
-
 	if desired == nil {
-		if existing == nil {
+		if existing == nil || !certs.OwnedBy(existing, toposerver.UID) {
 			return nil
 		}
 		return certs.Delete(ctx, r.Client, existing)
+	}
+
+	// A same-named Certificate belonging to another resource is a collision:
+	// leave it unmodified rather than adopting it through server-side apply.
+	if existing != nil && !certs.OwnedBy(existing, toposerver.UID) {
+		return fmt.Errorf(
+			"cert-manager Certificate %q in namespace %q already exists and is not owned by this TopoServer",
+			existing.GetName(),
+			existing.GetNamespace(),
+		)
 	}
 
 	if existing != nil && certs.SpecEqual(existing, desired) {

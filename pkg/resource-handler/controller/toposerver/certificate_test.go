@@ -217,6 +217,49 @@ func TestReconcileCertificate(t *testing.T) {
 		}
 	})
 
+	t.Run("reports a foreign certificate collision when enabled", func(t *testing.T) {
+		scheme := certScheme()
+		toposerver := certTestTopoServer(&multigresv1alpha1.TopoTLSConfig{Enabled: ptr.To(true)})
+		foreign, err := BuildServingCertificate(toposerver, scheme)
+		if err != nil {
+			t.Fatalf("BuildServingCertificate() error = %v", err)
+		}
+		foreign.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "example.com/v1",
+			Kind:       "Other",
+			Name:       "other",
+			UID:        "other-uid",
+			Controller: ptr.To(true),
+		}})
+
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(toposerver, foreign).Build()
+		r := &TopoServerReconciler{
+			Client:   c,
+			Scheme:   scheme,
+			Recorder: record.NewFakeRecorder(10),
+		}
+
+		key := client.ObjectKey{Namespace: "supabase", Name: certName}
+		before := &unstructured.Unstructured{}
+		before.SetGroupVersionKind(certs.GVK)
+		if err := c.Get(context.Background(), key, before); err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+
+		if err := r.reconcileCertificate(context.Background(), toposerver); err == nil {
+			t.Fatal("reconcileCertificate() error = nil, want collision error")
+		}
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(certs.GVK)
+		if err := c.Get(context.Background(), key, got); err != nil {
+			t.Fatalf("foreign Certificate was modified or deleted: %v", err)
+		}
+		if diff := cmp.Diff(before.Object, got.Object); diff != "" {
+			t.Errorf("foreign Certificate changed (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("prunes the certificate and its secret when disabled", func(t *testing.T) {
 		scheme := certScheme()
 		enabled := certTestTopoServer(&multigresv1alpha1.TopoTLSConfig{Enabled: ptr.To(true)})
