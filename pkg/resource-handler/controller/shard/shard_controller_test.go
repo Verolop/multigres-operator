@@ -1688,7 +1688,14 @@ func TestScaleDown_ExternallyDeletedExtraPod(t *testing.T) {
 	}
 
 	// 1. Run reconcile loop
-	err := r.reconcilePoolPods(context.Background(), shardObj, "primary", "zone1", poolSpec)
+	err := r.reconcilePoolPods(
+		context.Background(),
+		shardObj,
+		"primary",
+		"zone1",
+		poolSpec,
+		&shardRolloutTracker{},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2015,14 +2022,29 @@ func TestRollingUpdateOrder(t *testing.T) {
 					metadata.AnnotationSpecHash: "old-hash",
 				},
 			},
+			Status: corev1.PodStatus{
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				},
+			},
 		}
 		if err := c.Create(context.Background(), pod); err != nil {
 			t.Fatalf("failed to create pod: %v", err)
 		}
+		if err := c.Status().Update(context.Background(), pod); err != nil {
+			t.Fatalf("failed to set pod status: %v", err)
+		}
 	}
 
 	// Run reconcile loop
-	err := r.reconcilePoolPods(context.Background(), shardObj, "primary", "zone1", poolSpec)
+	err := r.reconcilePoolPods(
+		context.Background(),
+		shardObj,
+		"primary",
+		"zone1",
+		poolSpec,
+		&shardRolloutTracker{},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2051,6 +2073,126 @@ func TestRollingUpdateOrder(t *testing.T) {
 	}
 	if drainCount != 1 {
 		t.Errorf("Expected exactly 1 pod to have drain-requested annotation, got %d", drainCount)
+	}
+}
+
+// TestRollingUpdateWaitsForSiblingCell verifies that a pool does not start
+// draining its drifted pod while a *different* pool/cell in the same shard
+// has a pod that is not yet Ready. Each pool is reconciled independently (one
+// per cell), so without a shard-wide health check every pool could each
+// decide it is safe to drain at the same time, taking down every cell at
+// once.
+func TestRollingUpdateWaitsForSiblingCell(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	_ = multigresv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	poolSpec := multigresv1alpha1.PoolSpec{
+		ReplicasPerCell: ptr.To(int32(1)),
+		Storage:         multigresv1alpha1.StorageSpec{Size: "10Gi"},
+	}
+
+	shardObj := &multigresv1alpha1.Shard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-shard", Namespace: "default",
+			Labels: map[string]string{metadata.LabelMultigresCluster: "test-cluster"},
+		},
+		Spec: multigresv1alpha1.ShardSpec{
+			DatabaseName:   "db",
+			TableGroupName: "tg",
+			ShardName:      "s1",
+			Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
+				"pool-1": {
+					ReplicasPerCell: ptr.To(int32(1)),
+					Cells:           []multigresv1alpha1.CellName{"zone1"},
+				},
+				"pool-2": {
+					ReplicasPerCell: ptr.To(int32(1)),
+					Cells:           []multigresv1alpha1.CellName{"zone2"},
+				},
+			},
+		},
+	}
+
+	baseLabels := func(pool, cell string) map[string]string {
+		return map[string]string{
+			"app.kubernetes.io/component":     "shard-pool",
+			"app.kubernetes.io/instance":      "test-cluster",
+			metadata.LabelMultigresCluster:    "test-cluster",
+			metadata.LabelMultigresDatabase:   "db",
+			metadata.LabelMultigresTableGroup: "tg",
+			metadata.LabelMultigresShard:      "s1",
+			metadata.LabelMultigresPool:       pool,
+			metadata.LabelMultigresCell:       cell,
+		}
+	}
+
+	// zone1's pod is not draining or deleted, but has no Ready condition —
+	// e.g. it was just recreated by an earlier rollout step and is still
+	// starting up. Its spec hash is irrelevant here: isShardHealthy only
+	// looks at drain state, deletion, and readiness.
+	zone1Pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BuildPoolPodName(shardObj, "pool-1", "zone1", 0),
+			Namespace: "default",
+			Labels:    baseLabels("pool-1", "zone1"),
+		},
+	}
+
+	// zone2's pod is drifted (old spec hash) and otherwise healthy — a normal
+	// candidate for the rolling update.
+	zone2Pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BuildPoolPodName(shardObj, "pool-2", "zone2", 0),
+			Namespace: "default",
+			Labels:    baseLabels("pool-2", "zone2"),
+			Annotations: map[string]string{
+				metadata.AnnotationSpecHash: "old-hash",
+			},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shardObj).Build()
+	r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	for _, pod := range []*corev1.Pod{zone1Pod, zone2Pod} {
+		if err := c.Create(context.Background(), pod); err != nil {
+			t.Fatalf("failed to create pod %s: %v", pod.Name, err)
+		}
+		if err := c.Status().Update(context.Background(), pod); err != nil {
+			t.Fatalf("failed to set status for pod %s: %v", pod.Name, err)
+		}
+	}
+
+	if err := r.reconcilePoolPods(
+		context.Background(),
+		shardObj,
+		"pool-2",
+		"zone2",
+		poolSpec,
+		&shardRolloutTracker{},
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated corev1.Pod
+	if err := c.Get(
+		context.Background(),
+		client.ObjectKeyFromObject(zone2Pod),
+		&updated,
+	); err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+	if updated.Annotations[metadata.AnnotationDrainState] != "" {
+		t.Error(
+			"pool-2 should not drain its drifted pod while pool-1's pod in zone1 is not Ready",
+		)
 	}
 }
 
@@ -2120,7 +2262,14 @@ func TestDrainedPodReplacement(t *testing.T) {
 	}
 
 	// Run reconcile loop
-	err := r.reconcilePoolPods(context.Background(), shardObj, "primary", "zone1", poolSpec)
+	err := r.reconcilePoolPods(
+		context.Background(),
+		shardObj,
+		"primary",
+		"zone1",
+		poolSpec,
+		&shardRolloutTracker{},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

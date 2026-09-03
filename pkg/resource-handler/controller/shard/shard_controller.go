@@ -368,8 +368,12 @@ func (r *ShardReconciler) Reconcile(
 
 	{
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "Shard.ReconcilePools")
+		// Shared across every pool in this reconcile pass so that once one
+		// pool initiates a drain, no other pool starts one too in the same
+		// pass
+		rollout := &shardRolloutTracker{}
 		for poolName, pool := range shard.Spec.Pools {
-			if err := r.reconcilePool(ctx, shard, string(poolName), pool); err != nil {
+			if err := r.reconcilePool(ctx, shard, string(poolName), pool, rollout); err != nil {
 				monitoring.RecordSpanError(childSpan, err)
 				childSpan.End()
 				logger.Error(err, "Failed to reconcile pool", "poolName", poolName)
@@ -430,6 +434,7 @@ func (r *ShardReconciler) reconcilePool(
 	shard *multigresv1alpha1.Shard,
 	poolName string,
 	poolSpec multigresv1alpha1.PoolSpec,
+	rollout *shardRolloutTracker,
 ) error {
 	// Pools must have cells specified
 	if len(poolSpec.Cells) == 0 {
@@ -444,7 +449,14 @@ func (r *ShardReconciler) reconcilePool(
 		cellName := string(cell)
 
 		// Reconcile pool Pods and PVCs for this cell
-		if err := r.reconcilePoolPods(ctx, shard, poolName, cellName, poolSpec); err != nil {
+		if err := r.reconcilePoolPods(
+			ctx,
+			shard,
+			poolName,
+			cellName,
+			poolSpec,
+			rollout,
+		); err != nil {
 			return fmt.Errorf("failed to reconcile pool pods for cell %s: %w", cellName, err)
 		}
 
