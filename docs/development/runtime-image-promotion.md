@@ -38,8 +38,14 @@ It uses the existing `MULTIGRES_BOT_APP_ID` and
 `MULTIGRES_BOT_APP_PRIVATE_KEY`, scoped to contents and pull requests on the
 operator repository. The App token ensures branch pushes and PR creation trigger
 CI. Promotion PR CI validates the record and runs e2e against the committed PR
-head without runtime image overrides. Review the PR and require those checks
-before merging; promotion never merges automatically.
+head without runtime image overrides. Local `make pull-e2e-images` uses the same
+compiled defaults, including the Postgres exporter. When the reusable workflow
+checks out an older framework that still loads `testutil.MultigresImages`, it
+also pulls that revision's legacy list so empty and partial overrides remain
+usable. Current frameworks pull only the compiled set.
+
+Review the PR and require those checks before merging; promotion never merges
+automatically.
 
 The promotion script checks both main's record and any pending branch record for
 stale revisions. Before the first record exists, it also compares the nightly
@@ -66,7 +72,7 @@ checkpoint. No partially updated image set can become visible on the branch.
 ## Local validation
 
 ```sh
-node --test scripts/promote-runtime-images.test.js scripts/nightly-compatibility.test.js
+node --test scripts/promote-runtime-images.test.js scripts/nightly-compatibility.test.js scripts/e2e-images.test.js
 go test -tags=e2e ./test/e2e/framework -count=1
 actionlint .github/workflows/nightly-compatibility.yaml .github/workflows/pull-request.yaml .github/workflows/_reusable-e2e.yaml
 ```
