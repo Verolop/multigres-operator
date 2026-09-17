@@ -172,9 +172,19 @@ jobs:
 
       - name: Pull e2e images
         run: |
-          # Source overrides have already been applied. Pull exactly what the
-          # operator will compile, including digest-pinned promotion defaults.
-          E2E_IMAGES="$(sed -n 's/.*= "\(.*\)"$/\1/p' api/v1alpha1/image_defaults.go | sort -u | tr '\n' ' ')" \
+          # Source overrides have already been applied. Always pull the compiled
+          # defaults, including digest-pinned promotion images and the exporter.
+          required_images() {
+            sed -n 's/.*= "\(.*\)"$/\1/p' api/v1alpha1/image_defaults.go
+
+            # Older checked-out frameworks still load this separate image list
+            # for unset overrides. Read it from that ref, not from this workflow.
+            if grep -rq 'testutil.MultigresImages' test/e2e/framework; then
+              sed -n '/^var MultigresImages = \[\]string{/,/^}/s/^[[:space:]]*"\([^"]*\)".*/\1/p' \
+                pkg/testutil/e2e.go
+            fi
+          }
+          E2E_IMAGES="$(required_images | sort -u | tr '\n' ' ')" \
             make pull-e2e-images
 
       - name: Compute test packages
