@@ -39,10 +39,12 @@ It uses the existing `MULTIGRES_BOT_APP_ID` and
 operator repository. The App token ensures branch pushes and PR creation trigger
 CI. Promotion PR CI validates the record and runs e2e against the committed PR
 head without runtime image overrides. Local `make pull-e2e-images` uses the same
-compiled defaults, including the Postgres exporter. When the reusable workflow
+compiled defaults, including the Postgres exporter, to pull tagged images into
+Docker for import. Digest-pinned images are prepared directly inside each Kind
+node as described below. When the reusable workflow
 checks out an older framework that still loads `testutil.MultigresImages`, it
 also pulls that revision's legacy list so empty and partial overrides remain
-usable. Current frameworks pull only the compiled set.
+usable. Current frameworks prepare only the compiled set and requested overrides.
 
 Review the PR and require those checks before merging; promotion never merges
 automatically.
@@ -68,6 +70,30 @@ older green-only artifacts do not count. A failed promotion remains eligible for
 the next scheduled run. A failed PR API call may leave the complete candidate
 commit on the promotion branch; retry repairs PR publication before writing the
 checkpoint. No partially updated image set can become visible on the branch.
+
+## E2E image preparation
+
+Before deploying the operator or creating test workloads, the framework prepares
+the operator and configured runtime images on every Kind node. Tagged images,
+including the locally built operator, are imported from Docker. Digest-pinned
+runtime images are pulled through the node's CRI using the exact reference; the
+runtime selects the correct platform and validates the digest. No retagging or
+image-reference rewriting is needed.
+
+The existing loader processes images and nodes sequentially. For a digest
+reference, `crictl inspecti` checks the node's cache; if missing, `crictl pull
+--pull-timeout=10m` downloads it. There is no additional retry loop or preparation
+configuration. The runtime image list already removes duplicate references.
+
+Preparation failures identify the image and node in the setup log and stop the
+suite before workloads are created. The eight-minute workload-readiness deadline
+is unchanged. A fresh Kind node may still need to download new image layers, but
+that download time no longer consumes the workload's readiness deadline. Logs
+identify the image and node being prepared.
+
+The intended pattern is separate setup and workload validation, also used by
+[Kubernetes E2E image prepulling](https://github.com/kubernetes/kubernetes/blob/master/test/e2e/e2e.go)
+and [cert-manager's Kind setup](https://github.com/cert-manager/cert-manager/blob/master/make/e2e-setup.mk).
 
 ## Local validation
 

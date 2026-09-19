@@ -27,17 +27,22 @@ const legacy = [
   defaults.DefaultEtcdImage,
 ];
 
-function fixture(t, { oldFramework = false, images = defaults } = {}) {
+function fixture(t, { oldFramework = false, images = defaults, failImage = '' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-images-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (const name of ['api/v1alpha1', 'pkg/testutil', 'test/e2e/framework', 'bin']) {
     fs.mkdirSync(path.join(dir, name), { recursive: true });
   }
-  // Historical Makefiles defaulted to four mutable images. The current workflow
-  // must supply its complete pull list even when using that older Makefile.
-  fs.writeFileSync(path.join(dir, 'Makefile'), oldFramework
-    ? makefile.replace(/^E2E_IMAGES \?=.*$/m, `E2E_IMAGES ?= ${legacy.join(' ')}`)
-    : makefile);
+  // Historical Makefiles defaulted to four mutable images and pulled digest
+  // references on the host too. Preserve both behaviors in the compatibility case.
+  let fixtureMakefile = makefile;
+  if (oldFramework) {
+    fixtureMakefile = fixtureMakefile
+      .replace(/^E2E_IMAGES \?=.*$/m, `E2E_IMAGES ?= ${legacy.join(' ')}`)
+      .replace(/^pull-e2e-images:[^\n]*\n(?:\t[^\n]*\n)+/m,
+        () => 'pull-e2e-images:\n\t@for img in $(E2E_IMAGES); do docker pull "$$img"; done\n');
+  }
+  fs.writeFileSync(path.join(dir, 'Makefile'), fixtureMakefile);
   fs.writeFileSync(path.join(dir, 'api/v1alpha1/image_defaults.go'),
     `package v1alpha1\nconst (\n${Object.entries(images).map(([name, image]) => `\t${name} = "${image}"`).join('\n')}\n)\n`);
   // Both generations contain this legacy variable, but only the older framework
@@ -51,18 +56,18 @@ function fixture(t, { oldFramework = false, images = defaults } = {}) {
   fs.writeFileSync(cache, '');
   fs.writeFileSync(path.join(dir, 'bin/docker'), `#!/bin/sh
 case "$1" in
-  pull) printf '%s\\n' "$2" >> "$MOCK_CACHE" ;;
+  pull) [ "$2" != "$MOCK_FAIL_IMAGE" ] || exit 9; printf '%s\\n' "$2" >> "$MOCK_CACHE" ;;
   save) grep -Fx -- "$2" "$MOCK_CACHE" > /dev/null ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(dir, 'bin/go'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, MOCK_CACHE: cache };
+  const env = { ...process.env, PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, MOCK_CACHE: cache, MOCK_FAIL_IMAGE: failImage };
   delete env.E2E_IMAGES;
   delete env.MULTIGRES_IMAGES;
-  function run(command, args) {
+  function run(command, args, expectedStatus = 0) {
     const result = spawnSync(command, args, { cwd: dir, env, encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(result.status, expectedStatus, result.stderr || result.stdout);
   }
   return {
     run,
@@ -77,7 +82,7 @@ esac
 
 const unique = (images) => [...new Set(images)].sort();
 
-test('local make pulls every committed default into an empty Docker cache', (t) => {
+test('local make pulls tagged committed defaults into an empty Docker cache', (t) => {
   const f = fixture(t);
   f.run('make', ['-s', 'pull-e2e-images']);
   assert.deepEqual(f.pulled(), unique(Object.values(defaults)));
@@ -88,6 +93,19 @@ test('local make retains an explicit E2E_IMAGES override', (t) => {
   const f = fixture(t);
   f.run('make', ['-s', 'pull-e2e-images', 'E2E_IMAGES=example.test/custom:tag']);
   assert.deepEqual(f.pulled(), ['example.test/custom:tag']);
+});
+
+test('local make leaves digest references for preparation inside Kind', (t) => {
+  const digest = `example.test/runtime@sha256:${'a'.repeat(64)}`;
+  const f = fixture(t);
+  f.run('make', ['-s', 'pull-e2e-images', `E2E_IMAGES=${digest} example.test/exporter:tag`]);
+  assert.deepEqual(f.pulled(), ['example.test/exporter:tag']);
+});
+
+test('local make stops immediately when a tagged image cannot be pulled', (t) => {
+  const f = fixture(t, { failImage: 'example.test/fail:tag' });
+  f.run('make', ['-s', 'pull-e2e-images', 'E2E_IMAGES=example.test/fail:tag example.test/later:tag'], 2);
+  assert.deepEqual(f.pulled(), []);
 });
 
 for (const oldFramework of [false, true]) {
@@ -110,8 +128,9 @@ for (const oldFramework of [false, true]) {
         overrides === 'complete' ? images.DefaultMultiadminImage : legacy[0],
       ] : Object.values(images);
       f.checkLoadable(required);
-      for (const image of Object.values(images)) assert.ok(f.pulled().includes(image));
-      if (!oldFramework) assert.deepEqual(f.pulled(), unique(Object.values(images)));
+      const expected = Object.values(images).filter((image) => oldFramework || !image.includes('@'));
+      for (const image of expected) assert.ok(f.pulled().includes(image));
+      if (!oldFramework) assert.deepEqual(f.pulled(), unique(expected));
     });
   }
 }

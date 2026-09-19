@@ -87,9 +87,10 @@ func (c *Cluster) CRClient() (client.Client, error) {
 	return client.New(c.RestCfg, client.Options{Scheme: scheme})
 }
 
-// LoadImages loads locally tagged container images into every Kind node.
+// LoadImages prepares images on every Kind node before workloads are created.
+// Tagged images use the existing Docker import; digest references are pulled
+// directly by the node's runtime to preserve the reference used by the pods.
 func LoadImages(ctx context.Context, clusterName string, images []string) error {
-	images = kindLoadableImages(images)
 	if len(images) == 0 {
 		return nil
 	}
@@ -97,13 +98,36 @@ func LoadImages(ctx context.Context, clusterName string, images []string) error 
 	if err != nil {
 		return err
 	}
-	logf("loading %d locally tagged images into %s...", len(images), clusterName)
 	for _, image := range images {
 		for _, node := range nodes {
-			if err := importImage(ctx, node, image); err != nil {
-				return fmt.Errorf("load image %q into node %q: %w", image, node, err)
+			logf("preparing image %s on %s", image, node)
+			if strings.Contains(image, "@") {
+				err = pullDigestImage(ctx, node, image)
+			} else {
+				err = importImage(ctx, node, image)
+			}
+			if err != nil {
+				return fmt.Errorf("prepare image %q on node %q: %w", image, node, err)
 			}
 		}
+	}
+	return nil
+}
+
+func pullDigestImage(ctx context.Context, node, image string) error {
+	// #nosec G204 -- Fixed executables, Kind-provided node names, and image arguments; no shell expansion.
+	inspect := exec.CommandContext(ctx, "docker", "exec", node, "crictl", "inspecti", image)
+	if err := inspect.Run(); err == nil {
+		return nil
+	}
+	logf("pulling %s on %s", image, node)
+	// Bound the pull inside the node too; cancelling docker exec alone does not
+	// guarantee that its remote process stops.
+	// #nosec G204 -- Fixed executables, Kind-provided node names, and image arguments; no shell expansion.
+	out, err := exec.CommandContext(ctx, "docker", "exec", node,
+		"crictl", "pull", "--pull-timeout=10m", image).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("crictl pull: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -144,17 +168,6 @@ func importImage(ctx context.Context, node, image string) error {
 		return fmt.Errorf("import image into containerd: %w", err)
 	}
 	return nil
-}
-
-func kindLoadableImages(images []string) []string {
-	loadable := make([]string, 0, len(images))
-	for _, image := range images {
-		if strings.Contains(image, "@") {
-			continue
-		}
-		loadable = append(loadable, image)
-	}
-	return loadable
 }
 
 // ---------------------------------------------------------------------------
@@ -207,11 +220,11 @@ func setupCluster(name string) (*Cluster, error) {
 		return nil, fmt.Errorf("create RWX storage class: %w", err)
 	}
 
-	// Load images directly into each Kind node; idempotent.
+	// Prepare every image before deploying the operator or starting workload readiness timers.
 	preset := testutil.DefaultOperatorPreset()
 	imgs := append([]string{preset.Image}, runtimeImages()...)
 	if err := LoadImages(ctx, name, imgs); err != nil {
-		return nil, fmt.Errorf("load images: %w", err)
+		return nil, fmt.Errorf("prepare images: %w", err)
 	}
 
 	// Deploy operator (idempotent — server-side apply + rollout status).
