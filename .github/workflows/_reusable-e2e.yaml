@@ -172,8 +172,10 @@ jobs:
 
       - name: Pull e2e images
         run: |
-          # Source overrides have already been applied. Always pull the compiled
-          # defaults, including digest-pinned promotion images and the exporter.
+          # Source overrides have already been applied. Pass the compiled image
+          # set to Make, including promotion digests and the exporter. Current
+          # frameworks prepare digests directly in Kind and import tagged images;
+          # older checked-out Makefiles may still pull all references on the host.
           required_images() {
             sed -n 's/.*= "\(.*\)"$/\1/p' api/v1alpha1/image_defaults.go
 

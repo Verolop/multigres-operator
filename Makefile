@@ -28,10 +28,11 @@ print-img: ## Print the full operator container image reference
 E2E_IMAGES ?= $(MULTIGRES_IMAGES)
 
 .PHONY: pull-e2e-images
-pull-e2e-images: ## Pull container images needed by e2e tests
+pull-e2e-images: ## Pull tagged e2e images for import; the framework prepares digests in Kind
 	@for img in $(E2E_IMAGES); do \
+		case "$$img" in *@*) echo "Preparing $$img later in Kind"; continue ;; esac; \
 		echo "Pulling $$img..."; \
-		docker pull $$img; \
+		docker pull "$$img" || exit $$?; \
 	done
 
 # Build metadata
