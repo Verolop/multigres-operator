@@ -1,6 +1,9 @@
 package shard
 
 import (
+	"crypto/x509"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -899,16 +902,79 @@ func TestBuildPoolPod_NodeSelector(t *testing.T) {
 }
 
 func TestBuildPoolPod_Hostname(t *testing.T) {
-	pod, err := BuildPoolPod(newTestShard(), "main", "z1", newTestPoolSpec(), 0, testScheme())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := map[string]struct {
+		clusterName string
+		namespace   string
+		poolName    string
+		cellName    string
+		index       int
+	}{
+		"first replica":         {"test-cluster", "default", "main", "z1", 0},
+		"another pool and cell": {"test-cluster", "tenant-a", "extra", "zone-b", 1},
+		"truncated names and surge index": {
+			strings.Repeat("cluster", 8), "tenant-b", "read-replicas", "us-east-1a", 10,
+		},
 	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			shard := newTestShard()
+			shard.Labels["multigres.com/cluster"] = tt.clusterName
+			shard.Namespace = tt.namespace
+			pool := newTestPoolSpec()
+			pool.Cells = []multigresv1alpha1.CellName{multigresv1alpha1.CellName(tt.cellName)}
+			shard.Spec.Pools = map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
+				multigresv1alpha1.PoolName(tt.poolName): pool,
+			}
+			pod, err := BuildPoolPod(shard, tt.poolName, tt.cellName, pool, tt.index, testScheme())
+			require.NoError(t, err)
+			svc, err := BuildPoolHeadlessService(
+				shard,
+				tt.poolName,
+				tt.cellName,
+				pool,
+				testScheme(),
+			)
+			require.NoError(t, err)
 
-	if pod.Spec.Hostname != pod.Name {
-		t.Errorf("hostname = %q, should match pod name %q", pod.Spec.Hostname, pod.Name)
-	}
-	if pod.Spec.Subdomain == "" {
-		t.Error("subdomain (headless service name) should not be empty")
+			assert.Equal(t, pod.Name, pod.Spec.Hostname)
+			assert.Equal(t, svc.Name, pod.Spec.Subdomain)
+			assert.True(t, svc.Spec.PublishNotReadyAddresses)
+			for key, value := range svc.Spec.Selector {
+				assert.Equal(t, value, pod.Labels[key], "headless service must select the pod")
+			}
+			hostname := fmt.Sprintf("%s.%s.%s.svc.cluster.local", pod.Name, svc.Name, tt.namespace)
+			var hostnameArgs []string
+			for _, container := range pod.Spec.Containers {
+				for _, arg := range container.Args {
+					if strings.HasPrefix(arg, "--hostname=") {
+						assert.Equal(t, "multipooler", container.Name)
+						hostnameArgs = append(hostnameArgs, arg)
+					}
+				}
+			}
+			assert.Equal(t, []string{"--hostname=" + hostname}, hostnameArgs)
+			cert := &x509.Certificate{DNSNames: pgBackRestPoolDNSNames(shard)}
+			assert.NoError(
+				t,
+				cert.VerifyHostname(hostname),
+				"advertised address must match backup TLS SANs",
+			)
+
+			// Existing pods without the explicit address must enter the normal drift rollout.
+			legacyPod := pod.DeepCopy()
+			for i := range legacyPod.Spec.Containers {
+				legacyPod.Spec.Containers[i].Args = slices.DeleteFunc(
+					legacyPod.Spec.Containers[i].Args,
+					func(arg string) bool { return strings.HasPrefix(arg, "--hostname=") },
+				)
+			}
+			assert.Equal(t, ComputeSpecHash(pod), pod.Annotations[metadata.AnnotationSpecHash])
+			assert.NotEqual(
+				t,
+				ComputeSpecHash(legacyPod),
+				pod.Annotations[metadata.AnnotationSpecHash],
+			)
+		})
 	}
 }
 

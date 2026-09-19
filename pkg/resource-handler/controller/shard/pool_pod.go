@@ -84,6 +84,20 @@ func BuildPoolPod(
 	}}, volumes...)
 
 	serviceID := BuildPoolServiceID(podName)
+	headlessServiceName := buildHeadlessServiceName(shard, poolName, cellName)
+	multipooler := buildMultipoolerContainer(shard, poolSpec, poolName, cellName, serviceID)
+	// Supply the advertised address so failed hostname discovery cannot register
+	// a short pod name that other pods cannot resolve. The cluster.local suffix
+	// matches the operator's topology addresses and pgBackRest certificate SANs.
+	multipooler.Args = append(
+		multipooler.Args,
+		fmt.Sprintf(
+			"--hostname=%s.%s.%s.svc.cluster.local",
+			podName,
+			headlessServiceName,
+			shard.Namespace,
+		),
+	)
 
 	annotations := map[string]string{
 		metadata.AnnotationSpecHash: "", // placeholder, computed below
@@ -121,7 +135,7 @@ func BuildPoolPod(
 				buildPgctldSidecar(shard, poolSpec),
 			},
 			Containers: []corev1.Container{
-				buildMultipoolerContainer(shard, poolSpec, poolName, cellName, serviceID),
+				multipooler,
 				buildPostgresExporterContainer(shard),
 			},
 			Volumes:      volumes,
@@ -130,7 +144,7 @@ func BuildPoolPod(
 			NodeSelector: shard.Spec.CellTopologyLabels[multigresv1alpha1.CellName(cellName)],
 			// Hostname is set to the pod name for DNS resolution via headless service.
 			Hostname:  podName,
-			Subdomain: buildHeadlessServiceName(shard, poolName, cellName),
+			Subdomain: headlessServiceName,
 		},
 	}
 
