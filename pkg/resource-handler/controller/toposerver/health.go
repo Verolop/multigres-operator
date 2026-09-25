@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,6 +95,7 @@ func (r *TopoServerReconciler) probeHealth(
 	}
 	defer c.Close()
 	clusterIDs := make([]uint64, len(endpoints))
+	statusErrors := make([][]string, len(endpoints))
 	var wg sync.WaitGroup
 	for i, endpoint := range endpoints {
 		wg.Go(func() {
@@ -103,6 +105,7 @@ func (r *TopoServerReconciler) probeHealth(
 				return
 			}
 			clusterIDs[i] = s.Header.ClusterId
+			statusErrors[i] = s.Errors
 			members[i].BackendBytes = ptr.To(s.DbSize)
 			members[i].BackendInUseBytes = ptr.To(s.DbSizeInUse)
 			members[i].Revision = ptr.To(s.Header.Revision)
@@ -121,6 +124,25 @@ func (r *TopoServerReconciler) probeHealth(
 			return condition, members
 		}
 		clusterID = observedID
+	}
+	var failures []string
+	for i, errors := range statusErrors {
+		if len(errors) > 0 {
+			failures = append(
+				failures,
+				fmt.Sprintf("%s: %s", members[i].Name, strings.Join(errors, ", ")),
+			)
+		}
+	}
+	if len(failures) > 0 {
+		// NOSPACE can reject writes cluster-wide while linearizable reads still
+		// succeed. A read through another member must not mask a reported error.
+		condition.Status, condition.Reason = metav1.ConditionFalse, "EtcdStatusError"
+		condition.Message = fmt.Sprintf(
+			"Etcd members report status errors (%s); failover protection is unavailable",
+			strings.Join(failures, "; "),
+		)
+		return condition, members
 	}
 	responding, readable := 0, 0
 	for _, member := range members {

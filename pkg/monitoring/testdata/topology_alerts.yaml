@@ -4,6 +4,32 @@ rule_files:
 tests:
 - input_series:
   - series: multigres_operator_toposerver_quorum_available{cluster="example", name="example-global-topo",
+      target_namespace="database",reason="EtcdStatusError"}
+    values: 0x4 stale
+  - series: multigres_operator_cluster_failover_ready{cluster="example", target_namespace="database",reason="EtcdStatusError"}
+    values: 0x4 stale
+  - series: multigres_operator_toposerver_member_up{cluster="example", name="example-global-topo",
+      target_namespace="database",member="example-global-topo-0"}
+    values: 1x6
+  interval: 30s
+  name: etcd alarms trigger topology and failover alerts despite successful reads
+  promql_expr_test:
+  - eval_time: 30s
+    exp_samples: []
+    expr: count(ALERTS{reason="EtcdStatusError",alertstate="firing"})
+  - eval_time: 60s
+    exp_samples:
+    - labels: '{}'
+      value: 2
+    expr: count(ALERTS{alertname=~"MultigresTopologyQuorumUnavailable|MultigresFailoverUnavailable",reason="EtcdStatusError",alertstate="firing"})
+  - eval_time: 120s
+    exp_samples: []
+    expr: count(ALERTS{alertname="MultigresTopologyMemberUnavailable",alertstate="firing"})
+  - eval_time: 150s
+    exp_samples: []
+    expr: count(ALERTS{reason="EtcdStatusError",alertstate="firing"})
+- input_series:
+  - series: multigres_operator_toposerver_quorum_available{cluster="example", name="example-global-topo",
       target_namespace="database",reason="QuorumUnavailable"}
     values: 1x1 0x4 1x3
   interval: 30s

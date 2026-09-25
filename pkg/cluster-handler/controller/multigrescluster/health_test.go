@@ -24,6 +24,7 @@ func TestFailoverHealthConditions(t *testing.T) {
 	for _, tc := range []struct {
 		name                                                                                          string
 		quorum                                                                                        metav1.ConditionStatus
+		quorumReason                                                                                  string
 		stale, missing, orchDown, shardStale, shardMissing, accessFailed, external, observationFailed bool
 		want                                                                                          metav1.ConditionStatus
 		reason                                                                                        string
@@ -31,6 +32,7 @@ func TestFailoverHealthConditions(t *testing.T) {
 		{name: "failed shard observation clears readiness", quorum: metav1.ConditionTrue, observationFailed: true, want: metav1.ConditionUnknown, reason: "ObservationFailed"},
 		{name: "healthy", quorum: metav1.ConditionTrue, want: metav1.ConditionTrue, reason: "FailoverReady"},
 		{name: "quorum lost with ready pods", quorum: metav1.ConditionFalse, want: metav1.ConditionFalse, reason: "QuorumUnavailable"},
+		{name: "etcd alarm with ready pods and successful registration", quorum: metav1.ConditionFalse, quorumReason: "EtcdStatusError", want: metav1.ConditionFalse, reason: "EtcdStatusError"},
 		{name: "stale topology observation", quorum: metav1.ConditionTrue, stale: true, want: metav1.ConditionUnknown, reason: "TopologyHealthStale"},
 		{name: "missing topology", missing: true, want: metav1.ConditionFalse, reason: "TopologyMissing"},
 		{name: "known orchestrator failure takes precedence over stale quorum", quorum: metav1.ConditionTrue, stale: true, orchDown: true, want: metav1.ConditionFalse, reason: "OrchestratorUnavailable"},
@@ -105,6 +107,10 @@ func TestFailoverHealthConditions(t *testing.T) {
 					},
 				},
 			}
+			if tc.quorumReason != "" {
+				servers[0].Status.Conditions[0].Reason = tc.quorumReason
+				servers[0].Status.Conditions[0].Message = "Etcd member reports NOSPACE"
+			}
 			if tc.missing || tc.external {
 				servers = nil
 			}
@@ -150,6 +156,9 @@ func TestFailoverHealthConditions(t *testing.T) {
 			condition := meta.FindStatusCondition(cluster.Status.Conditions, conditionFailoverReady)
 			require.Equal(t, tc.want, condition.Status)
 			require.Equal(t, tc.reason, condition.Reason)
+			if tc.quorumReason != "" {
+				require.Contains(t, condition.Message, "NOSPACE")
+			}
 			require.True(
 				t,
 				meta.IsStatusConditionTrue(cluster.Status.Conditions, "Available"),

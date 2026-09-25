@@ -45,12 +45,17 @@ func TestProbeTopologyQuorum(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string
 		unavailable, blocked         []int
+		statusErrors                 map[int][]string
 		clientError, clusterMismatch bool
 		want                         metav1.ConditionStatus
 		reason                       string
 	}{
 		{name: "different etcd clusters", clusterMismatch: true, want: metav1.ConditionFalse, reason: "ClusterMismatch"},
 		{name: "healthy", want: metav1.ConditionTrue, reason: "QuorumAvailable"},
+		{name: "NOSPACE despite successful reads", statusErrors: map[int][]string{0: {"NOSPACE"}}, want: metav1.ConditionFalse, reason: "EtcdStatusError"},
+		{name: "healthy members cannot mask another member alarm", statusErrors: map[int][]string{2: {"NOSPACE"}}, want: metav1.ConditionFalse, reason: "EtcdStatusError"},
+		{name: "multiple status errors", statusErrors: map[int][]string{0: {"NOSPACE", "CORRUPT"}, 1: {"unexpected health error"}}, want: metav1.ConditionFalse, reason: "EtcdStatusError"},
+		{name: "alarm on member with failed reads", blocked: []int{0}, statusErrors: map[int][]string{0: {"NOSPACE"}}, want: metav1.ConditionFalse, reason: "EtcdStatusError"},
 		{name: "one unreachable member", unavailable: []int{0}, want: metav1.ConditionTrue, reason: "QuorumAvailable"},
 		{name: "only one endpoint reachable but quorum read succeeds", unavailable: []int{0, 1}, want: metav1.ConditionTrue, reason: "QuorumAvailable"},
 		{name: "status works without quorum", blocked: []int{0, 1, 2}, want: metav1.ConditionFalse, reason: "QuorumUnavailable"},
@@ -74,6 +79,9 @@ func TestProbeTopologyQuorum(t *testing.T) {
 			for _, i := range tc.blocked {
 				c.blockedReads[endpoints[i]] = true
 			}
+			for i, errors := range tc.statusErrors {
+				f.statuses[endpoints[i]].Errors = errors
+			}
 			r.newMaintenanceClient = func(ctx context.Context, _ *multigresv1alpha1.TopoServer) (etcdMaintenanceClient, error) {
 				deadline, ok := ctx.Deadline()
 				require.True(t, ok)
@@ -90,9 +98,50 @@ func TestProbeTopologyQuorum(t *testing.T) {
 				require.False(t, members[i].Up)
 				require.Nil(t, members[i].BackendBytes)
 			}
+			for i, errors := range tc.statusErrors {
+				require.Contains(t, condition.Message, members[i].Name)
+				for _, err := range errors {
+					require.Contains(t, condition.Message, err)
+				}
+				require.Equal(t, !c.blockedReads[endpoints[i]], members[i].Up)
+				require.Equal(t, f.statuses[endpoints[i]].DbSize, *members[i].BackendBytes)
+				require.Equal(
+					t,
+					f.statuses[endpoints[i]].DbSizeInUse,
+					*members[i].BackendInUseBytes,
+				)
+				require.Equal(t, f.statuses[endpoints[i]].Header.Revision, *members[i].Revision)
+			}
 			require.Empty(t, f.defragged)
 			require.Empty(t, f.moved)
 		})
+	}
+}
+
+func TestHealthObservationRecoversAfterEtcdAlarm(t *testing.T) {
+	r, ts, f := maintenanceFixture(t)
+	for _, alarmed := range []bool{false, true, false} {
+		status := f.statuses[maintenanceEndpoints(ts)[0]]
+		status.Errors = nil
+		want, reason := metav1.ConditionTrue, "QuorumAvailable"
+		if alarmed {
+			status.Errors = []string{"NOSPACE"}
+			want, reason = metav1.ConditionFalse, "EtcdStatusError"
+		}
+		_, err := r.reconcileHealth(
+			t.Context(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ts)},
+		)
+		require.NoError(t, err)
+		fresh := &multigresv1alpha1.TopoServer{}
+		require.NoError(t, r.Get(t.Context(), client.ObjectKeyFromObject(ts), fresh))
+		condition := meta.FindStatusCondition(fresh.Status.Conditions, "QuorumAvailable")
+		require.NotNil(t, condition)
+		require.Equal(t, want, condition.Status)
+		require.Equal(t, reason, condition.Reason)
+		if !alarmed {
+			require.NotContains(t, condition.Message, "NOSPACE")
+		}
 	}
 }
 

@@ -11,7 +11,10 @@ The operator checks each managed etcd member every 30 seconds with a status RPC
 and a read-only, linearizable Get. The probes run independently of resource
 reconciliation and defragmentation, with a five-second deadline. A successful
 linearizable read confirms quorum even when the operator cannot reach every
-member. Status RPCs alone do not confirm quorum.
+member. Status RPCs alone do not confirm quorum. A status error from any member
+sets `QuorumAvailable=False` with reason `EtcdStatusError`, even when reads succeed.
+For example, a NOSPACE alarm allows reads but blocks the topology writes required
+during failover. The condition message identifies each member reporting an error.
 
 `TopoServer.status.conditions[QuorumAvailable]` reports the result.
 `TopologyUnreachable` means no member answered the operator; it does not prove
@@ -42,7 +45,7 @@ orchestrator readiness. Monitor external etcd through its owner.
 
 | Alert | Threshold | Severity |
 | --- | --- | --- |
-| `MultigresTopologyQuorumUnavailable` | No successful quorum read for one minute | critical |
+| `MultigresTopologyQuorumUnavailable` | Failed quorum check, inconsistent cluster IDs, or etcd status errors for one minute | critical |
 | `MultigresTopologyMemberUnavailable` | A member cannot complete reads for two minutes | warning |
 | `MultigresTopologyHealthUnknown` | Unknown probe or observation over two minutes old, for one minute | warning |
 | `MultigresTopologyBackendNearQuota` | Backend over 80% of quota for five minutes | warning |
@@ -76,6 +79,8 @@ inspect the affected shard's multiorch Deployments and pod readiness.
 
 For backend pressure, compare total backend bytes with bytes in use. Review
 compaction and defragmentation settings in [Topology maintenance](../../topology-maintenance.md).
+If the condition reports NOSPACE, reclaim backend space before disarming the alarm
+with `etcdctl alarm disarm`. Successful reads alone do not confirm recovery.
 For memory pressure or OOMs, inspect working-set history and the running pod's
 memory limit. Raising the backend quota does not increase available memory.
 
@@ -91,7 +96,7 @@ All names below begin with `multigres_operator_`:
 | --- | --- |
 | `toposerver_quorum_available` | 1 true, 0 false, -1 unknown; includes `reason` |
 | `toposerver_health_checked_timestamp_seconds` | Last completed probe |
-| `toposerver_member_up` | Member completed a linearizable read |
+| `toposerver_member_up` | Member completed a linearizable read; may remain 1 during a NOSPACE alarm |
 | `toposerver_backend_bytes` | Total backend size |
 | `toposerver_backend_in_use_bytes` | Backend bytes in use |
 | `toposerver_backend_quota_bytes` | Quota configured on the running pod |

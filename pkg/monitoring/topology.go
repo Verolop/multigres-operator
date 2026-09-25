@@ -23,7 +23,7 @@ func topologyGauge(name, help string, labels []string) *prometheus.GaugeVec {
 var (
 	topoQuorum = topologyGauge(
 		"toposerver_quorum_available",
-		"Linearizable etcd reads succeed: 1 yes, 0 no, -1 unknown.",
+		"Etcd quorum is verified with no reported status errors: 1 yes, 0 no, -1 unknown.",
 		append(append([]string{}, topologyLabels...), "reason"),
 	)
 	topoChecked = topologyGauge(

@@ -89,9 +89,9 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "Topology quorum unavailable for {{ $labels.target_namespace }}/{{ $labels.name }}"
+            summary: "Topology unavailable for failover in {{ $labels.target_namespace }}/{{ $labels.name }}"
             description: >-
-              {{ $labels.reason }}: the operator cannot confirm quorum for one consistent etcd cluster.
+              {{ $labels.reason }}: the operator detected an etcd status error or cannot confirm quorum for one consistent etcd cluster.
               Cluster {{ $labels.cluster }} has lost verified failover protection;
               existing SQL connections may still serve traffic.
             runbook_url: "https://github.com/multigres/multigres-operator/blob/main/docs/monitoring/runbooks/TopologyHealth.md"
