@@ -81,62 +81,7 @@ func (r *TopoServerReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
-	// An interrupted defrag may still be running on the server. Recover its
-	// reservation before allowing a pod rollout to take another member down.
-	if waiting, err := r.resumeMaintenance(ctx, toposerver); err != nil || waiting {
-		return ctrl.Result{RequeueAfter: statusRecheckDelay}, err
-	}
-
-	// Validate StorageClass dependency before StatefulSet apply
-	if err := r.validateEtcdStorageClassDependency(ctx, toposerver); err != nil {
-		if isStorageClassDependencyError(err) {
-			logger.Info("StorageClass dependency is not ready; requeueing",
-				"after", storageClassDependencyRequeue)
-			return ctrl.Result{RequeueAfter: storageClassDependencyRequeue}, nil
-		}
-		monitoring.RecordSpanError(span, err)
-		logger.Error(err, "Failed to validate etcd StorageClass")
-		return ctrl.Result{}, err
-	}
-
-	// Reconcile StatefulSet
-	{
-		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcileStatefulSet")
-		if err := r.reconcileStatefulSet(ctx, toposerver); err != nil {
-			monitoring.RecordSpanError(childSpan, err)
-			childSpan.End()
-			logger.Error(err, "Failed to reconcile StatefulSet")
-			r.Recorder.Eventf(
-				toposerver,
-				"Warning",
-				"FailedApply",
-				"Failed to reconcile StatefulSet: %v",
-				err,
-			)
-			return ctrl.Result{}, err
-		}
-		childSpan.End()
-	}
-
-	// Reconcile PodDisruptionBudget
-	{
-		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcilePodDisruptionBudget")
-		if err := r.reconcilePodDisruptionBudget(ctx, toposerver); err != nil {
-			monitoring.RecordSpanError(childSpan, err)
-			childSpan.End()
-			logger.Error(err, "Failed to reconcile PodDisruptionBudget")
-			r.Recorder.Eventf(
-				toposerver,
-				"Warning",
-				"FailedApply",
-				"Failed to reconcile PodDisruptionBudget: %v",
-				err,
-			)
-			return ctrl.Result{}, err
-		}
-		childSpan.End()
-	}
-
+	// Restore Services and the serving Certificate before checking maintenance health.
 	// Reconcile headless Service
 	{
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcileHeadlessService")
@@ -187,6 +132,62 @@ func (r *TopoServerReconciler) Reconcile(
 				"Warning",
 				"FailedApply",
 				"Failed to reconcile serving Certificate: %v",
+				err,
+			)
+			return ctrl.Result{}, err
+		}
+		childSpan.End()
+	}
+
+	// An interrupted defrag may still be running on the server. Recover its
+	// reservation before allowing a pod rollout to take another member down.
+	if waiting, err := r.resumeMaintenance(ctx, toposerver); err != nil || waiting {
+		return ctrl.Result{RequeueAfter: statusRecheckDelay}, err
+	}
+
+	// Validate StorageClass dependency before StatefulSet apply
+	if err := r.validateEtcdStorageClassDependency(ctx, toposerver); err != nil {
+		if isStorageClassDependencyError(err) {
+			logger.Info("StorageClass dependency is not ready; requeueing",
+				"after", storageClassDependencyRequeue)
+			return ctrl.Result{RequeueAfter: storageClassDependencyRequeue}, nil
+		}
+		monitoring.RecordSpanError(span, err)
+		logger.Error(err, "Failed to validate etcd StorageClass")
+		return ctrl.Result{}, err
+	}
+
+	// Reconcile StatefulSet
+	{
+		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcileStatefulSet")
+		if err := r.reconcileStatefulSet(ctx, toposerver); err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			logger.Error(err, "Failed to reconcile StatefulSet")
+			r.Recorder.Eventf(
+				toposerver,
+				"Warning",
+				"FailedApply",
+				"Failed to reconcile StatefulSet: %v",
+				err,
+			)
+			return ctrl.Result{}, err
+		}
+		childSpan.End()
+	}
+
+	// Reconcile PodDisruptionBudget
+	{
+		ctx, childSpan := monitoring.StartChildSpan(ctx, "TopoServer.ReconcilePodDisruptionBudget")
+		if err := r.reconcilePodDisruptionBudget(ctx, toposerver); err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			logger.Error(err, "Failed to reconcile PodDisruptionBudget")
+			r.Recorder.Eventf(
+				toposerver,
+				"Warning",
+				"FailedApply",
+				"Failed to reconcile PodDisruptionBudget: %v",
 				err,
 			)
 			return ctrl.Result{}, err
