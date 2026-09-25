@@ -96,6 +96,22 @@ type TopoServerStatus struct {
 	// PeerService is the name of the service for peers.
 	// +optional
 	PeerService string `json:"peerService,omitempty"`
+
+	// EtcdMaintenance records a maintenance reservation before contacting etcd,
+	// preventing overlapping defragmentation across reconciles and restarts.
+	// +optional
+	EtcdMaintenance *EtcdMaintenanceStatus `json:"etcdMaintenance,omitempty"`
+}
+
+// EtcdMaintenanceStatus tracks the most recent automatic defragmentation.
+type EtcdMaintenanceStatus struct {
+	// LastAttemptTime starts the one-hour minimum interval between members.
+	LastAttemptTime metav1.Time `json:"lastAttemptTime"`
+	// Endpoint identifies the member reserved for defragmentation.
+	Endpoint string `json:"endpoint"`
+	// InProgress remains true after an interrupted or uncertain operation until
+	// all members pass health checks again. While true, pod rollouts are paused.
+	InProgress bool `json:"inProgress"`
 }
 
 // ============================================================================
@@ -127,6 +143,12 @@ type EtcdSpec struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// Maintenance configures MVCC history retention, backend quota, and optional
+	// defragmentation. Applies only to operator-managed etcd. Omitted fields use
+	// the defaults documented on EtcdMaintenanceConfig.
+	// +optional
+	Maintenance *EtcdMaintenanceConfig `json:"maintenance,omitempty"`
+
 	// RootPath is the etcd prefix for this cluster.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
@@ -137,6 +159,40 @@ type EtcdSpec struct {
 	// Overrides GlobalTopoServerSpec and MultigresCluster settings.
 	// +optional
 	PVCDeletionPolicy *PVCDeletionPolicy `json:"pvcDeletionPolicy,omitempty"`
+}
+
+// EtcdMaintenanceConfig controls storage maintenance independently of logical
+// topology pruning. Defaults are applied at rendering time so template values
+// remain inheritable. Changing compaction or quota rolls the etcd pods.
+// +kubebuilder:validation:XValidation:rule="!has(self.autoCompactionRetention) || ((has(self.autoCompactionMode) && self.autoCompactionMode == 'revision') ? self.autoCompactionRetention.matches('^[1-9][0-9]{0,9}$') : self.autoCompactionRetention.matches('^([0-9]{1,6}h)?([0-9]{1,6}m)?([0-9]{1,6}s)?$'))",message="compaction retention must be a positive revision count in revision mode or a duration using h, m, s in periodic mode"
+type EtcdMaintenanceConfig struct {
+	// AutoCompactionMode defaults to periodic (time-based retention).
+	// +kubebuilder:validation:Enum=periodic;revision
+	// +optional
+	AutoCompactionMode string `json:"autoCompactionMode,omitempty"`
+
+	// AutoCompactionRetention defaults to 1h in periodic mode or 10000 in
+	// revision mode. Periodic values must be positive durations (e.g. 30m, 1h).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="self.matches('[1-9]')",message="compaction retention must be positive"
+	// +optional
+	AutoCompactionRetention string `json:"autoCompactionRetention,omitempty"`
+
+	// QuotaBackendBytes defaults to 2147483648 (2 GiB), preserving etcd's
+	// existing default. This is a storage quota, not a memory limit: provision
+	// memory for measured restore-time usage and disk for the backend and WAL.
+	// Do not lower the quota below an existing backend's size.
+	// +kubebuilder:validation:Minimum=1048576
+	// +kubebuilder:validation:Maximum=8589934592
+	// +optional
+	QuotaBackendBytes *int64 `json:"quotaBackendBytes,omitempty"`
+
+	// DefragmentationEnabled opts into hourly, health-gated maintenance of at
+	// most one member. Requires at least three healthy members, no rollout,
+	// and at least 100 MiB and 30% reclaimable space. Disabled by default.
+	// +optional
+	DefragmentationEnabled *bool `json:"defragmentationEnabled,omitempty"`
 }
 
 // GlobalTopoServerSpec defines the configuration for the global topology server.

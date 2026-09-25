@@ -2,10 +2,28 @@ package toposerver
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
+	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 )
+
+func buildMaintenanceEnv(config *multigresv1alpha1.EtcdMaintenanceConfig) ([]corev1.EnvVar, error) {
+	mode, retention, err := config.EffectiveCompaction()
+	if err != nil {
+		return nil, err
+	}
+	quota := config.EffectiveQuotaBackendBytes()
+	if quota < 1024*1024 || quota > 8*1024*1024*1024 {
+		return nil, fmt.Errorf("etcd backend quota must be between 1 MiB and 8 GiB")
+	}
+	return []corev1.EnvVar{
+		{Name: "ETCD_AUTO_COMPACTION_MODE", Value: mode},
+		{Name: "ETCD_AUTO_COMPACTION_RETENTION", Value: retention},
+		{Name: "ETCD_QUOTA_BACKEND_BYTES", Value: strconv.FormatInt(quota, 10)},
+	}, nil
+}
 
 // buildContainerEnv constructs all environment variables for etcd clustering in
 // StatefulSets. This combines pod identity, etcd config, and cluster peer

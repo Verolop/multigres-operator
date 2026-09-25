@@ -2,6 +2,7 @@ package multigrescluster
 
 import (
 	"context"
+	"path"
 	"reflect"
 	"testing"
 
@@ -18,6 +19,63 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/name"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestConvergedTopologyReconcileDoesNotWrite(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cluster := &multigresv1alpha1.MultigresCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "default"},
+		Spec: multigresv1alpha1.MultigresClusterSpec{
+			GlobalTopoServer: &multigresv1alpha1.GlobalTopoServerSpec{
+				External: &multigresv1alpha1.ExternalTopoServerSpec{
+					Endpoints: []multigresv1alpha1.EndpointUrl{"http://topo:2379"},
+				},
+			},
+			Cells: []multigresv1alpha1.CellConfig{
+				{Name: "cell1"},
+			},
+			Databases: []multigresv1alpha1.DatabaseConfig{{Name: "db"}},
+		},
+	}
+	store := newClusterTopologyMemoryStore(t)
+	c := fake.NewClientBuilder().WithScheme(setupScheme()).WithObjects(cluster).Build()
+	r := &MultigresClusterReconciler{
+		Client:          c,
+		Scheme:          setupScheme(),
+		Recorder:        record.NewFakeRecorder(100),
+		CreateTopoStore: func(multigresv1alpha1.GlobalTopoServerRef) (topoclient.Store, error) { return noCloseStore{store}, nil },
+	}
+	res := resolver.NewResolver(c, cluster.Namespace)
+	if _, err := r.reconcileTopology(ctx, cluster, res); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := store.ConnForCell(ctx, topoclient.GlobalCell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]string{}
+	for _, file := range []string{path.Join(topoclient.CellsPath, "cell1", topoclient.CellFile), path.Join(topoclient.DatabasesPath, "db", topoclient.DatabaseFile)} {
+		_, v, err := conn.Get(ctx, file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		versions[file] = v.String()
+	}
+	for range 5 {
+		if _, err := r.reconcileTopology(ctx, cluster, res); err != nil {
+			t.Fatal(err)
+		}
+		for file, want := range versions {
+			_, v, err := conn.Get(ctx, file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.String() != want {
+				t.Fatalf("converged reconcile rewrote %s", file)
+			}
+		}
+	}
+}
 
 func TestReconcileTopologySharedTopo(t *testing.T) {
 	t.Parallel()

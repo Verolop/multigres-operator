@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
@@ -63,7 +64,7 @@ func RegisterCell(
 	}
 
 	if !created {
-		logger.V(1).Info("Updated existing cell in topology", "cellName", cellName)
+		logger.V(1).Info("Reconciled cell in topology", "cellName", cellName)
 		return nil
 	}
 
@@ -132,6 +133,10 @@ func createOrUpdateCell(
 				ctx,
 				cellName,
 				func(existing *clustermetadata.Cell) error {
+					if existing.Name == cellMetadata.Name && existing.Root == cellMetadata.Root &&
+						existing.Metadata == cellMetadata.Metadata && slices.Equal(existing.ServerAddresses, cellMetadata.ServerAddresses) {
+						return &topoclient.TopoError{Code: topoclient.NoUpdateNeeded}
+					}
 					existing.Name = cellMetadata.Name
 					existing.ServerAddresses = cellMetadata.ServerAddresses
 					existing.Root = cellMetadata.Root

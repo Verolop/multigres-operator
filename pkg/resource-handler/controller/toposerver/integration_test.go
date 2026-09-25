@@ -145,6 +145,9 @@ func TestTopoServerReconciliation(t *testing.T) {
 											{Name: "ETCD_INITIAL_CLUSTER_STATE", Value: "new"},
 											{Name: "ETCD_INITIAL_CLUSTER_TOKEN", Value: "test-toposerver"},
 											{Name: "ETCD_INITIAL_CLUSTER", Value: "test-toposerver-0=http://test-toposerver-0.test-toposerver-headless.default.svc.cluster.local:2380,test-toposerver-1=http://test-toposerver-1.test-toposerver-headless.default.svc.cluster.local:2380,test-toposerver-2=http://test-toposerver-2.test-toposerver-headless.default.svc.cluster.local:2380"},
+											{Name: "ETCD_AUTO_COMPACTION_MODE", Value: "periodic"},
+											{Name: "ETCD_AUTO_COMPACTION_RETENTION", Value: "1h"},
+											{Name: "ETCD_QUOTA_BACKEND_BYTES", Value: "2147483648"},
 										},
 										VolumeMounts: []corev1.VolumeMount{
 											{Name: "data", MountPath: "/var/lib/etcd"},
@@ -327,6 +330,9 @@ func TestTopoServerReconciliation(t *testing.T) {
 											{Name: "ETCD_INITIAL_CLUSTER_STATE", Value: "new"},
 											{Name: "ETCD_INITIAL_CLUSTER_TOKEN", Value: "delete-policy-topo"},
 											{Name: "ETCD_INITIAL_CLUSTER", Value: "delete-policy-topo-0=http://delete-policy-topo-0.delete-policy-topo-headless.default.svc.cluster.local:2380,delete-policy-topo-1=http://delete-policy-topo-1.delete-policy-topo-headless.default.svc.cluster.local:2380,delete-policy-topo-2=http://delete-policy-topo-2.delete-policy-topo-headless.default.svc.cluster.local:2380"},
+											{Name: "ETCD_AUTO_COMPACTION_MODE", Value: "periodic"},
+											{Name: "ETCD_AUTO_COMPACTION_RETENTION", Value: "1h"},
+											{Name: "ETCD_QUOTA_BACKEND_BYTES", Value: "2147483648"},
 										},
 										VolumeMounts: []corev1.VolumeMount{
 											{Name: "data", MountPath: "/var/lib/etcd"},

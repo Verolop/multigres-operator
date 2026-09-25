@@ -88,6 +88,14 @@ func BuildStatefulSet(
 	}
 
 	tlsEnabled := toposerver.Spec.TLS.IsEnabled()
+	var maintenance *multigresv1alpha1.EtcdMaintenanceConfig
+	if toposerver.Spec.Etcd != nil {
+		maintenance = toposerver.Spec.Etcd.Maintenance
+	}
+	maintenanceEnv, err := buildMaintenanceEnv(maintenance)
+	if err != nil {
+		return nil, err
+	}
 
 	volumeMounts := []corev1.VolumeMount{
 		{
@@ -143,13 +151,13 @@ func BuildStatefulSet(
 							Name:      "etcd",
 							Image:     image,
 							Resources: resources,
-							Env: buildContainerEnv(
+							Env: append(buildContainerEnv(
 								toposerver.Name,
 								toposerver.Namespace,
 								replicas,
 								headlessServiceName,
 								tlsEnabled,
-							),
+							), maintenanceEnv...),
 							Ports:        buildContainerPorts(toposerver),
 							VolumeMounts: volumeMounts,
 							StartupProbe: &corev1.Probe{
