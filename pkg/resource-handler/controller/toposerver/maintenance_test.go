@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,23 +25,29 @@ import (
 )
 
 type fakeEtcdMaintenance struct {
-	statuses    map[string]*clientv3.StatusResponse
-	defragged   []string
-	moved       []uint64
-	healthErr   error
-	defragErr   error
-	afterDefrag func()
+	statuses           map[string]*clientv3.StatusResponse
+	members            []*pb.Member
+	defragged          []string
+	moved              []uint64
+	statusErr          error
+	healthErr          error
+	defragErr          error
+	skipLeaderTransfer bool
+	afterDefrag        func()
 }
 
 func (f *fakeEtcdMaintenance) Status(
 	_ context.Context,
 	ep string,
 ) (*clientv3.StatusResponse, error) {
+	if f.statusErr != nil {
+		return nil, f.statusErr
+	}
 	return f.statuses[ep], nil
 }
 
 func (f *fakeEtcdMaintenance) Members(context.Context) (*clientv3.MemberListResponse, error) {
-	return &clientv3.MemberListResponse{Members: []*pb.Member{{ID: 1}, {ID: 2}, {ID: 3}}}, nil
+	return &clientv3.MemberListResponse{Members: f.members}, nil
 }
 func (f *fakeEtcdMaintenance) Health(context.Context, string) error { return f.healthErr }
 func (f *fakeEtcdMaintenance) Defragment(_ context.Context, ep string) error {
@@ -53,6 +60,9 @@ func (f *fakeEtcdMaintenance) Defragment(_ context.Context, ep string) error {
 
 func (f *fakeEtcdMaintenance) MoveLeader(_ context.Context, _ string, id uint64) error {
 	f.moved = append(f.moved, id)
+	if f.skipLeaderTransfer {
+		return nil
+	}
 	for _, s := range f.statuses {
 		s.Leader = id
 	}
@@ -87,7 +97,10 @@ func maintenanceFixture(
 		UpdateRevision:     "rev1",
 	}
 	objects := []client.Object{ts, sts}
-	f := &fakeEtcdMaintenance{statuses: map[string]*clientv3.StatusResponse{}}
+	f := &fakeEtcdMaintenance{
+		statuses: map[string]*clientv3.StatusResponse{},
+		members:  []*pb.Member{{ID: 1}, {ID: 2}, {ID: 3}},
+	}
 	for i, ep := range maintenanceEndpoints(ts) {
 		f.statuses[ep] = &clientv3.StatusResponse{
 			Header:      &pb.ResponseHeader{ClusterId: 123, MemberId: uint64(i + 1)},
@@ -227,6 +240,102 @@ func TestEtcdMaintenanceHealthGates(t *testing.T) {
 				t.Fatalf("unsafe defragmentation: %v", f.defragged)
 			}
 		})
+	}
+}
+
+func TestEtcdMaintenanceRejectsInvalidMemberResponses(t *testing.T) {
+	statusErr := errors.New("status RPC unavailable")
+	for _, tc := range []struct {
+		name      string
+		mutate    func(*fakeEtcdMaintenance)
+		wantError string
+		wantCause error
+	}{
+		{
+			name:      "missing member",
+			mutate:    func(f *fakeEtcdMaintenance) { f.members = f.members[:2] },
+			wantError: "etcd membership differs from expected replicas",
+		},
+		{
+			name:      "extra member",
+			mutate:    func(f *fakeEtcdMaintenance) { f.members = append(f.members, &pb.Member{ID: 4}) },
+			wantError: "etcd membership differs from expected replicas",
+		},
+		{
+			name:      "learner member",
+			mutate:    func(f *fakeEtcdMaintenance) { f.members[1].IsLearner = true },
+			wantError: "etcd membership includes an unready voting member",
+		},
+		{
+			name:      "zero member ID",
+			mutate:    func(f *fakeEtcdMaintenance) { f.members[1].ID = 0 },
+			wantError: "etcd membership includes an unready voting member",
+		},
+		{
+			name:      "status RPC failure",
+			mutate:    func(f *fakeEtcdMaintenance) { f.statusErr = statusErr },
+			wantError: "status: status RPC unavailable",
+			wantCause: statusErr,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, ts, f := maintenanceFixture(t)
+			tc.mutate(f)
+			err := r.reconcileMaintenance(t.Context(), ts)
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("expected %q, got %v", tc.wantError, err)
+			}
+			if tc.wantCause != nil && !errors.Is(err, tc.wantCause) {
+				t.Errorf("error %v does not wrap %v", err, tc.wantCause)
+			}
+			if len(f.moved) != 0 || len(f.defragged) != 0 {
+				t.Errorf(
+					"maintenance changed unhealthy members: transfers=%v defrags=%v",
+					f.moved,
+					f.defragged,
+				)
+			}
+			fresh := &multigresv1alpha1.TopoServer{}
+			if err := r.Get(t.Context(), client.ObjectKeyFromObject(ts), fresh); err != nil {
+				t.Fatal(err)
+			}
+			if fresh.Status.EtcdMaintenance != nil {
+				t.Error("failed health checks created a maintenance reservation")
+			}
+		})
+	}
+}
+
+func TestEtcdMaintenanceIncompleteLeadershipTransfer(t *testing.T) {
+	r, ts, f := maintenanceFixture(t)
+	f.skipLeaderTransfer = true
+	err := r.reconcileMaintenance(t.Context(), ts)
+	if err == nil || err.Error() != "etcd leadership transfer has not completed" {
+		t.Fatalf("expected incomplete leadership transfer, got %v", err)
+	}
+	if len(f.moved) != 1 || f.moved[0] != 2 {
+		t.Errorf("leadership transfer attempts = %v, want [2]", f.moved)
+	}
+	if len(f.defragged) != 0 {
+		t.Errorf(
+			"defragmented a member whose leadership transfer did not complete: %v",
+			f.defragged,
+		)
+	}
+	fresh := &multigresv1alpha1.TopoServer{}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(ts), fresh); err != nil {
+		t.Fatal(err)
+	}
+	state := fresh.Status.EtcdMaintenance
+	if state == nil || !state.InProgress || state.Endpoint != maintenanceEndpoints(ts)[0] {
+		t.Fatalf("incomplete transfer did not retain the target reservation: %+v", state)
+	}
+	r2 := *r
+	if err := r2.reconcileMaintenance(t.Context(), fresh); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.moved) != 1 || len(f.defragged) != 0 {
+		t.Error("maintenance restarted while the transfer reservation remained active")
 	}
 }
 
