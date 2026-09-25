@@ -54,6 +54,53 @@ spec:
                         maxLength: 512
                         minLength: 1
                         type: string
+                      maintenance:
+                        description: |-
+                          Maintenance configures MVCC history retention, backend quota, and optional
+                          defragmentation. Applies only to operator-managed etcd. Omitted fields use
+                          the defaults documented on EtcdMaintenanceConfig.
+                        properties:
+                          autoCompactionMode:
+                            description: AutoCompactionMode defaults to periodic (time-based
+                              retention).
+                            enum:
+                            - periodic
+                            - revision
+                            type: string
+                          autoCompactionRetention:
+                            description: |-
+                              AutoCompactionRetention defaults to 1h in periodic mode or 10000 in
+                              revision mode. Periodic values must be positive durations (e.g. 30m, 1h).
+                            maxLength: 32
+                            minLength: 1
+                            type: string
+                            x-kubernetes-validations:
+                            - message: compaction retention must be positive
+                              rule: self.matches('[1-9]')
+                          defragmentationEnabled:
+                            description: |-
+                              DefragmentationEnabled opts into hourly, health-gated maintenance of at
+                              most one member. Requires at least three healthy members, no rollout,
+                              and at least 100 MiB and 30% reclaimable space. Disabled by default.
+                            type: boolean
+                          quotaBackendBytes:
+                            description: |-
+                              QuotaBackendBytes defaults to 2147483648 (2 GiB), preserving etcd's
+                              existing default. This is a storage quota, not a memory limit: provision
+                              memory for measured restore-time usage and disk for the backend and WAL.
+                              Do not lower the quota below an existing backend's size.
+                            format: int64
+                            maximum: 8589934592
+                            minimum: 1048576
+                            type: integer
+                        type: object
+                        x-kubernetes-validations:
+                        - message: compaction retention must be a positive revision
+                            count in revision mode or a duration using h, m, s in
+                            periodic mode
+                          rule: '!has(self.autoCompactionRetention) || ((has(self.autoCompactionMode)
+                            && self.autoCompactionMode == ''revision'') ? self.autoCompactionRetention.matches(''^[1-9][0-9]{0,9}$'')
+                            : self.autoCompactionRetention.matches(''^([0-9]{1,6}h)?([0-9]{1,6}m)?([0-9]{1,6}s)?$''))'
                       pvcDeletionPolicy:
                         description: |-
                           PVCDeletionPolicy controls PVC lifecycle for etcd volumes.

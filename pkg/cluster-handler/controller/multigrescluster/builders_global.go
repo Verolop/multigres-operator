@@ -80,11 +80,12 @@ func BuildGlobalTopoServer(
 		},
 		Spec: multigresv1alpha1.TopoServerSpec{
 			Etcd: &multigresv1alpha1.EtcdSpec{
-				Image:     spec.Etcd.Image,
-				Replicas:  spec.Etcd.Replicas,
-				Storage:   spec.Etcd.Storage,
-				Resources: spec.Etcd.Resources,
-				RootPath:  spec.Etcd.RootPath,
+				Image:       spec.Etcd.Image,
+				Replicas:    spec.Etcd.Replicas,
+				Storage:     spec.Etcd.Storage,
+				Resources:   spec.Etcd.Resources,
+				RootPath:    spec.Etcd.RootPath,
+				Maintenance: spec.Etcd.Maintenance.DeepCopy(),
 			},
 			PVCDeletionPolicy: finalPolicy,
 			TLS:               cluster.Spec.TopoTLS.DeepCopy(),

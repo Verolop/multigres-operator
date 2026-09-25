@@ -4,8 +4,39 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 )
+
+func TestMaintenanceEnvironment(t *testing.T) {
+	ts := certTestTopoServer(nil)
+	ts.Spec.Etcd.Maintenance = &multigresv1alpha1.EtcdMaintenanceConfig{
+		AutoCompactionMode:      "revision",
+		AutoCompactionRetention: "20000",
+		QuotaBackendBytes:       ptr.To(int64(512 << 20)),
+	}
+	sts, err := BuildStatefulSet(ts, certScheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := etcdEnvMap(t, sts)
+	for key, want := range map[string]string{"ETCD_AUTO_COMPACTION_MODE": "revision", "ETCD_AUTO_COMPACTION_RETENTION": "20000", "ETCD_QUOTA_BACKEND_BYTES": "536870912"} {
+		if env[key] != want {
+			t.Errorf("%s=%q, want %q", key, env[key], want)
+		}
+	}
+	for _, config := range []*multigresv1alpha1.EtcdMaintenanceConfig{
+		{AutoCompactionRetention: "0h"},
+		{QuotaBackendBytes: ptr.To(int64(0))},
+		{QuotaBackendBytes: ptr.To(int64(9 << 30))},
+	} {
+		ts.Spec.Etcd.Maintenance = config
+		if _, err := BuildStatefulSet(ts, certScheme()); err == nil {
+			t.Errorf("accepted invalid maintenance: %+v", config)
+		}
+	}
+}
 
 func TestBuildPodIdentityEnv(t *testing.T) {
 	got := buildPodIdentityEnv()

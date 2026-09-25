@@ -640,6 +640,12 @@ func TestBuildStatefulSet(t *testing.T) {
 			if tc.wantErr {
 				return
 			}
+			tc.want.Spec.Template.Spec.Containers[0].Env = append(
+				tc.want.Spec.Template.Spec.Containers[0].Env,
+				corev1.EnvVar{Name: "ETCD_AUTO_COMPACTION_MODE", Value: "periodic"},
+				corev1.EnvVar{Name: "ETCD_AUTO_COMPACTION_RETENTION", Value: "1h"},
+				corev1.EnvVar{Name: "ETCD_QUOTA_BACKEND_BYTES", Value: "2147483648"},
+			)
 
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("BuildStatefulSet() mismatch (-want +got):\n%s", diff)

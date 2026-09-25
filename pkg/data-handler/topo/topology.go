@@ -86,15 +86,12 @@ func RegisterDatabaseFromSpec(
 				ctx,
 				dbName,
 				func(existing *clustermetadatapb.Database) error {
-					existing.BackupLocation = dbMetadata.BackupLocation
-					existing.Cells = dbMetadata.Cells
-					existing.BootstrapDurabilityPolicy = dbMetadata.BootstrapDurabilityPolicy
-					return nil
+					return updateDatabaseMetadata(existing, dbMetadata)
 				},
 			); err != nil {
 				return fmt.Errorf("updating existing database %s in topology: %w", dbName, err)
 			}
-			logger.V(1).Info("Updated existing database in topology", "database", dbName)
+			logger.V(1).Info("Reconciled database in topology", "database", dbName)
 			return nil
 		}
 		return fmt.Errorf("failed to create database in topology: %w", err)
@@ -157,7 +154,7 @@ func RegisterCellFromSpec(
 	}
 
 	if !created {
-		logger.Info("Updated existing cell in topology", "cellName", cellName)
+		logger.V(1).Info("Reconciled cell in topology", "cellName", cellName)
 		return nil
 	}
 

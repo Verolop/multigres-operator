@@ -35,6 +35,10 @@ func (r *MultigresClusterReconciler) reconcileCells(
 	}
 
 	activeCellNames := make(map[multigresv1alpha1.CellName]bool, len(cluster.Spec.Cells))
+	existingVersions := make(map[string]string, len(existingCells.Items))
+	for i := range existingCells.Items {
+		existingVersions[existingCells.Items[i].Name] = existingCells.Items[i].ResourceVersion
+	}
 
 	allCellNames := []multigresv1alpha1.CellName{}
 	for _, cellCfg := range cluster.Spec.Cells {
@@ -78,7 +82,10 @@ func (r *MultigresClusterReconciler) reconcileCells(
 		); err != nil {
 			return false, fmt.Errorf("failed to apply cell '%s': %w", cellCfg.Name, err)
 		}
-		r.Recorder.Eventf(cluster, "Normal", "Applied", "Applied Cell %s", desired.Name)
+		if before, found := existingVersions[desired.Name]; !found ||
+			before != desired.ResourceVersion {
+			r.Recorder.Eventf(cluster, "Normal", "Applied", "Applied Cell %s", desired.Name)
+		}
 	}
 
 	var pendingDeletion bool

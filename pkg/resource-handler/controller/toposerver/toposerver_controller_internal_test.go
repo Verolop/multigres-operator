@@ -251,6 +251,9 @@ func TestSetupWithManager(t *testing.T) {
 		if err := r.SetupWithManager(mgr); err != nil {
 			t.Errorf("SetupWithManager() error = %v", err)
 		}
+		if r.APIReader != mgr.GetAPIReader() {
+			t.Error("maintenance must use the manager's uncached API reader")
+		}
 	})
 
 	t.Run("with options", func(t *testing.T) {
@@ -267,6 +270,33 @@ func TestSetupWithManager(t *testing.T) {
 			t.Errorf("SetupWithManager() with opts error = %v", err)
 		}
 	})
+
+	for name, reader := range map[string]client.Reader{
+		"shared setup defaults to uncached reader": nil,
+		"shared setup preserves injected reader":   fake.NewClientBuilder().WithScheme(scheme).Build(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			mgr := createMgr()
+			r := &TopoServerReconciler{
+				Client:    mgr.GetClient(),
+				APIReader: reader,
+				Scheme:    scheme,
+				Recorder:  record.NewFakeRecorder(100),
+			}
+			if err := r.SetupWithManagerReconciler(mgr, r, controller.Options{
+				SkipNameValidation: ptr.To(true),
+			}); err != nil {
+				t.Fatalf("SetupWithManagerReconciler() error = %v", err)
+			}
+			want := reader
+			if want == nil {
+				want = mgr.GetAPIReader()
+			}
+			if r.APIReader != want {
+				t.Error("shared setup selected the wrong maintenance reader")
+			}
+		})
+	}
 }
 
 func TestUpdateStatus_DegradedOnCrashLoop(t *testing.T) {

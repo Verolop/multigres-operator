@@ -37,8 +37,11 @@ const (
 // TopoServerReconciler reconciles a TopoServer object.
 type TopoServerReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+	// newMaintenanceClient supplies direct per-member clients; overridden in tests.
+	newMaintenanceClient func(context.Context, *multigresv1alpha1.TopoServer) (etcdMaintenanceClient, error)
 }
 
 // Reconcile manages the etcd StatefulSet, headless service, and client service for a TopoServer.
@@ -76,6 +79,12 @@ func (r *TopoServerReconciler) Reconcile(
 	if !toposerver.DeletionTimestamp.IsZero() {
 		logger.Info("TopoServer is being deleted, skipping reconciliation")
 		return ctrl.Result{}, nil
+	}
+
+	// An interrupted defrag may still be running on the server. Recover its
+	// reservation before allowing a pod rollout to take another member down.
+	if waiting, err := r.resumeMaintenance(ctx, toposerver); err != nil || waiting {
+		return ctrl.Result{RequeueAfter: statusRecheckDelay}, err
 	}
 
 	// Validate StorageClass dependency before StatefulSet apply
@@ -209,6 +218,16 @@ func (r *TopoServerReconciler) Reconcile(
 
 	if toposerver.Status.Phase != multigresv1alpha1.PhaseHealthy {
 		return ctrl.Result{RequeueAfter: statusRecheckDelay}, nil
+	}
+	if maintenanceEnabled(toposerver) {
+		if err := r.reconcileMaintenance(ctx, toposerver); err != nil {
+			logger.Error(err, "Etcd maintenance deferred")
+			r.Recorder.Eventf(toposerver, "Warning", "EtcdMaintenanceFailed", "%v", err)
+		}
+		if state := toposerver.Status.EtcdMaintenance; state != nil && state.InProgress {
+			return ctrl.Result{RequeueAfter: statusRecheckDelay}, nil
+		}
+		return ctrl.Result{RequeueAfter: maintenanceInterval}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -521,6 +540,9 @@ func (r *TopoServerReconciler) SetupWithManagerReconciler(
 	reconciler reconcile.Reconciler,
 	opts ...controller.Options,
 ) error {
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	controllerOpts := controller.Options{
 		MaxConcurrentReconciles: 20,
 	}

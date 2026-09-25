@@ -53,6 +53,9 @@ func (r *Resolver) ResolveCell(
 		}
 		if localTopo.Etcd != nil {
 			defaultEtcdSpec(localTopo.Etcd, defaultRootPath)
+			if _, _, err := localTopo.Etcd.Maintenance.EffectiveCompaction(); err != nil {
+				return nil, nil, nil, fmt.Errorf("local topology maintenance: %w", err)
+			}
 		}
 		if localTopo.External != nil {
 			defaultExternalTopoSpec(localTopo.External, defaultRootPath)

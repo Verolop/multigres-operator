@@ -219,6 +219,9 @@ func (r *Resolver) ResolveGlobalTopo(
 
 	if finalSpec.Etcd != nil {
 		defaultEtcdSpec(finalSpec.Etcd, roots.Global())
+		if _, _, err := finalSpec.Etcd.Maintenance.EffectiveCompaction(); err != nil {
+			return nil, fmt.Errorf("global topology maintenance: %w", err)
+		}
 	}
 	if finalSpec.External != nil {
 		defaultExternalTopoSpec(finalSpec.External, roots.Global())
@@ -380,5 +383,25 @@ func mergeEtcdSpec(base *multigresv1alpha1.EtcdSpec, override *multigresv1alpha1
 	}
 	if override.PVCDeletionPolicy != nil {
 		base.PVCDeletionPolicy = override.PVCDeletionPolicy
+	}
+	if override.Maintenance != nil {
+		if base.Maintenance == nil {
+			base.Maintenance = &multigresv1alpha1.EtcdMaintenanceConfig{}
+		}
+		m := override.Maintenance
+		if m.AutoCompactionMode != "" {
+			base.Maintenance.AutoCompactionMode = m.AutoCompactionMode
+		}
+		if m.AutoCompactionRetention != "" {
+			base.Maintenance.AutoCompactionRetention = m.AutoCompactionRetention
+		}
+		if m.QuotaBackendBytes != nil {
+			v := *m.QuotaBackendBytes
+			base.Maintenance.QuotaBackendBytes = &v
+		}
+		if m.DefragmentationEnabled != nil {
+			v := *m.DefragmentationEnabled
+			base.Maintenance.DefragmentationEnabled = &v
+		}
 	}
 }

@@ -167,8 +167,10 @@ func (r *MultigresClusterReconciler) Reconcile(
 		}
 		childSpan.End()
 
-		for _, decision := range decisions {
-			r.Recorder.Event(cluster, "Normal", "ImplicitDefault", decision)
+		if cluster.Status.ObservedGeneration != cluster.Generation || cluster.Status.Phase == "" {
+			for _, decision := range decisions {
+				r.Recorder.Event(cluster, "Normal", "ImplicitDefault", decision)
+			}
 		}
 	}
 

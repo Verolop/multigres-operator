@@ -10,6 +10,7 @@
 | [Runtime Log Schema](observability/log-schema.md) | Field definitions for enriched Multigres runtime logs |
 | [Durability Policy](durability-policy.md) | Durability policies, cross-AZ quorum, per-database overrides |
 | [Storage Management](storage.md) | PVC deletion policies and volume expansion |
+| [Topology Maintenance](topology-maintenance.md) | etcd compaction, backend quota, and guarded defragmentation |
 | [External Gateway](external-gateway.md) | External multigateway exposure, DNS wiring, GatewayExternalReady condition |
 | [External Admin Web](external-admin-web.md) | External multiadmin-web exposure, AdminWebExternalReady condition |
 | [PostgreSQL Initialization](postgresql-initialization.md) | Custom initdb arguments (locale, encoding, WAL segment size) |
