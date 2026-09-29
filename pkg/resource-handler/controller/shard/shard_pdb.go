@@ -45,6 +45,7 @@ func BuildShardPodDisruptionBudget(
 	labels := shardPDBLabels(shard)
 	selectorLabels := metadata.GetSelectorLabels(labels)
 	minAvailable := intstr.FromInt32(shardMinAvailable(shard))
+	unhealthyPodEvictionPolicy := policyv1.AlwaysAllow
 
 	pdb := &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
@@ -57,6 +58,7 @@ func BuildShardPodDisruptionBudget(
 			Selector: &metav1.LabelSelector{
 				MatchLabels: selectorLabels,
 			},
+			UnhealthyPodEvictionPolicy: &unhealthyPodEvictionPolicy,
 		},
 	}
 
