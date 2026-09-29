@@ -169,8 +169,15 @@ func buildPoolPodSecurityContext(poolSpec multigresv1alpha1.PoolSpec) *corev1.Po
 	}
 
 	fsGroup := *poolSpec.FSGroup
+	// With the default policy (Always), kubelet walks the whole volume and ORs
+	// in g+rw on every mount, including the remount it does after its own
+	// restart while the pod keeps running. That turns the 0600 libpq pgpass
+	// file into 0660, libpq then ignores it, and replication stops
+	// authenticating. OnRootMismatch applies ownership once, on first mount,
+	// and also avoids a full recursive walk of pg_data on every pod start.
 	return &corev1.PodSecurityContext{
-		FSGroup: &fsGroup,
+		FSGroup:             &fsGroup,
+		FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
 	}
 }
 

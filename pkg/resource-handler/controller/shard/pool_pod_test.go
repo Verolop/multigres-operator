@@ -664,6 +664,13 @@ func assertPoolPodFSGroup(t *testing.T, pod *corev1.Pod, want int64) {
 		t.Fatal("pod fsGroup is nil")
 	}
 	assert.Equal(t, want, *pod.Spec.SecurityContext.FSGroup)
+	if assert.NotNil(t, pod.Spec.SecurityContext.FSGroupChangePolicy) {
+		assert.Equal(
+			t,
+			corev1.FSGroupChangeOnRootMismatch,
+			*pod.Spec.SecurityContext.FSGroupChangePolicy,
+		)
+	}
 	assert.Nil(t, pod.Spec.SecurityContext.RunAsUser)
 	assert.Nil(t, pod.Spec.SecurityContext.RunAsGroup)
 }
