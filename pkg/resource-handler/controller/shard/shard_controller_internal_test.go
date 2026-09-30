@@ -4745,92 +4745,121 @@ func TestReconcilePool_PoolPodsError(t *testing.T) {
 }
 
 func TestUpdateStatus_HealthyPhase(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = multigresv1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-	_ = appsv1.AddToScheme(scheme)
-
-	shard := &multigresv1alpha1.Shard{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-shard-healthy",
-			Namespace: "default",
-			Labels:    map[string]string{metadata.LabelMultigresCluster: "test-cluster"},
+	// Ready pools and a ready Multiorch are only Healthy when some pod holds
+	// the PRIMARY role; a leaderless shard is Degraded.
+	tests := map[string]struct {
+		podRoles    func(podName string) map[string]string
+		wantPhase   multigresv1alpha1.Phase
+		wantMessage string
+	}{
+		"primary present": {
+			podRoles:    func(podName string) map[string]string { return map[string]string{podName: "PRIMARY"} },
+			wantPhase:   multigresv1alpha1.PhaseHealthy,
+			wantMessage: "Ready",
 		},
-		Spec: multigresv1alpha1.ShardSpec{
-			DatabaseName:   "db",
-			TableGroupName: "tg",
-			ShardName:      "s1",
-			Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
-				"primary": {
-					Cells:           []multigresv1alpha1.CellName{"zone1"},
-					ReplicasPerCell: ptr.To(int32(1)),
+		"only a replica": {
+			podRoles:    func(podName string) map[string]string { return map[string]string{podName: "REPLICA"} },
+			wantPhase:   multigresv1alpha1.PhaseDegraded,
+			wantMessage: "No primary pod for shard",
+		},
+		"no roles reported": {
+			podRoles:    func(string) map[string]string { return nil },
+			wantPhase:   multigresv1alpha1.PhaseDegraded,
+			wantMessage: "No primary pod for shard",
+		},
+	}
+
+	for desc, tc := range tests {
+		t.Run(desc, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			_ = multigresv1alpha1.AddToScheme(scheme)
+			_ = corev1.AddToScheme(scheme)
+			_ = appsv1.AddToScheme(scheme)
+
+			shard := &multigresv1alpha1.Shard{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-shard-healthy",
+					Namespace: "default",
+					Labels:    map[string]string{metadata.LabelMultigresCluster: "test-cluster"},
 				},
-			},
-			Multiorch: multigresv1alpha1.MultiorchSpec{
-				Cells: []multigresv1alpha1.CellName{"zone1"},
-			},
-		},
-		Status: multigresv1alpha1.ShardStatus{
-			Phase: multigresv1alpha1.PhaseProgressing,
-		},
-	}
-	labels := buildPoolLabelsWithCell(shard, "primary", "zone1")
-	podName := BuildPoolPodName(shard, "primary", "zone1", 0)
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: "default",
-			Labels:    labels,
-		},
-		Status: corev1.PodStatus{
-			Conditions: []corev1.PodCondition{
-				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-			},
-		},
-	}
+				Spec: multigresv1alpha1.ShardSpec{
+					DatabaseName:   "db",
+					TableGroupName: "tg",
+					ShardName:      "s1",
+					Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
+						"primary": {
+							Cells:           []multigresv1alpha1.CellName{"zone1"},
+							ReplicasPerCell: ptr.To(int32(1)),
+						},
+					},
+					Multiorch: multigresv1alpha1.MultiorchSpec{
+						Cells: []multigresv1alpha1.CellName{"zone1"},
+					},
+				},
+				Status: multigresv1alpha1.ShardStatus{
+					Phase: multigresv1alpha1.PhaseProgressing,
+				},
+			}
+			labels := buildPoolLabelsWithCell(shard, "primary", "zone1")
+			podName := BuildPoolPodName(shard, "primary", "zone1", 0)
+			shard.Status.PodRoles = tc.podRoles(podName)
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      podName,
+					Namespace: "default",
+					Labels:    labels,
+				},
+				Status: corev1.PodStatus{
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
 
-	// Create Multiorch Deployment with ready replicas so OrchReady=true
-	moDeployName := buildMultiorchNameWithCell(shard, "zone1", name.DefaultConstraints)
-	moSelector := map[string]string{
-		metadata.LabelMultigresCluster:    "test-cluster",
-		metadata.LabelMultigresDatabase:   "db",
-		metadata.LabelMultigresTableGroup: "tg",
-		metadata.LabelMultigresShard:      "s1",
-	}
-	moDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       moDeployName,
-			Namespace:  "default",
-			Labels:     moSelector,
-			Generation: 1,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
-		},
-		Status: appsv1.DeploymentStatus{
-			ReadyReplicas:      1,
-			ObservedGeneration: 1,
-		},
-	}
+			// Create Multiorch Deployment with ready replicas so OrchReady=true
+			moDeployName := buildMultiorchNameWithCell(shard, "zone1", name.DefaultConstraints)
+			moSelector := map[string]string{
+				metadata.LabelMultigresCluster:    "test-cluster",
+				metadata.LabelMultigresDatabase:   "db",
+				metadata.LabelMultigresTableGroup: "tg",
+				metadata.LabelMultigresShard:      "s1",
+			}
+			moDeploy := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       moDeployName,
+					Namespace:  "default",
+					Labels:     moSelector,
+					Generation: 1,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
+				},
+				Status: appsv1.DeploymentStatus{
+					ReadyReplicas:      1,
+					ObservedGeneration: 1,
+				},
+			}
 
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(shard, pod, moDeploy).
-		WithStatusSubresource(&multigresv1alpha1.Shard{}).
-		Build()
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(shard, pod, moDeploy).
+				WithStatusSubresource(&multigresv1alpha1.Shard{}).
+				Build()
 
-	recorder := record.NewFakeRecorder(10)
-	r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: recorder}
+			recorder := record.NewFakeRecorder(10)
+			r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
-	err := r.updateStatus(t.Context(), shard, renderedConfig{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if shard.Status.Phase != multigresv1alpha1.PhaseHealthy {
-		t.Errorf("expected PhaseHealthy, got %q", shard.Status.Phase)
-	}
-	if shard.Status.Message != "Ready" {
-		t.Errorf("expected 'Ready' message, got %q", shard.Status.Message)
+			err := r.updateStatus(t.Context(), shard, renderedConfig{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if shard.Status.Phase != tc.wantPhase {
+				t.Errorf("expected phase %q, got %q", tc.wantPhase, shard.Status.Phase)
+			}
+			if shard.Status.Message != tc.wantMessage {
+				t.Errorf("expected message %q, got %q", tc.wantMessage, shard.Status.Message)
+			}
+		})
 	}
 }
 
