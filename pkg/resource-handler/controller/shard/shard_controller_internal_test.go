@@ -17,6 +17,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -4748,24 +4749,28 @@ func TestUpdateStatus_HealthyPhase(t *testing.T) {
 	// Ready pools and a ready Multiorch are only Healthy when some pod holds
 	// the PRIMARY role; a leaderless shard is Degraded.
 	tests := map[string]struct {
-		podRoles    func(podName string) map[string]string
-		wantPhase   multigresv1alpha1.Phase
-		wantMessage string
+		podRoles       func(podName string) map[string]string
+		wantPhase      multigresv1alpha1.Phase
+		wantMessage    string
+		wantHasPrimary float64
 	}{
 		"primary present": {
-			podRoles:    func(podName string) map[string]string { return map[string]string{podName: "PRIMARY"} },
-			wantPhase:   multigresv1alpha1.PhaseHealthy,
-			wantMessage: "Ready",
+			podRoles:       func(podName string) map[string]string { return map[string]string{podName: "PRIMARY"} },
+			wantPhase:      multigresv1alpha1.PhaseHealthy,
+			wantMessage:    "Ready",
+			wantHasPrimary: 1,
 		},
 		"only a replica": {
-			podRoles:    func(podName string) map[string]string { return map[string]string{podName: "REPLICA"} },
-			wantPhase:   multigresv1alpha1.PhaseDegraded,
-			wantMessage: "No primary pod for shard",
+			podRoles:       func(podName string) map[string]string { return map[string]string{podName: "REPLICA"} },
+			wantPhase:      multigresv1alpha1.PhaseDegraded,
+			wantMessage:    "No primary pod for shard",
+			wantHasPrimary: 0,
 		},
 		"no roles reported": {
-			podRoles:    func(string) map[string]string { return nil },
-			wantPhase:   multigresv1alpha1.PhaseDegraded,
-			wantMessage: "No primary pod for shard",
+			podRoles:       func(string) map[string]string { return nil },
+			wantPhase:      multigresv1alpha1.PhaseDegraded,
+			wantMessage:    "No primary pod for shard",
+			wantHasPrimary: 0,
 		},
 	}
 
@@ -4859,8 +4864,43 @@ func TestUpdateStatus_HealthyPhase(t *testing.T) {
 			if shard.Status.Message != tc.wantMessage {
 				t.Errorf("expected message %q, got %q", tc.wantMessage, shard.Status.Message)
 			}
+			if got := shardHasPrimaryMetric(
+				t,
+				"test-cluster",
+				shard.Name,
+				"default",
+			); got != tc.wantHasPrimary {
+				t.Errorf("expected shard_has_primary %v, got %v", tc.wantHasPrimary, got)
+			}
 		})
 	}
+}
+
+// shardHasPrimaryMetric reads multigres_operator_shard_has_primary for one
+// shard from the controller-runtime registry the operator publishes to.
+func shardHasPrimaryMetric(t *testing.T, cluster, shard, namespace string) float64 {
+	t.Helper()
+	families, err := crmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != "multigres_operator_shard_has_primary" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["cluster"] == cluster && labels["shard"] == shard &&
+				labels["namespace"] == namespace {
+				return m.GetGauge().GetValue()
+			}
+		}
+	}
+	t.Fatalf("shard_has_primary has no series for %s/%s/%s", cluster, shard, namespace)
+	return 0
 }
 
 func TestUpdatePoolsStatus_TerminatingPodExcluded(t *testing.T) {

@@ -124,6 +124,14 @@ var (
 		},
 		[]string{"cluster", "shard", "namespace"},
 	)
+
+	shardHasPrimary = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multigres_operator_shard_has_primary",
+			Help: "1 if any pod of the Shard holds the PRIMARY role, 0 if none does.",
+		},
+		[]string{"cluster", "shard", "namespace"},
+	)
 )
 
 func init() {
@@ -142,6 +150,7 @@ func init() {
 		rollingUpdateInProgress,
 		reconcileErrorsTotal,
 		shardPostureInconsistent,
+		shardHasPrimary,
 	)
 }
 
@@ -163,6 +172,7 @@ func Collectors() []prometheus.Collector {
 		rollingUpdateInProgress,
 		reconcileErrorsTotal,
 		shardPostureInconsistent,
+		shardHasPrimary,
 	}
 }
 

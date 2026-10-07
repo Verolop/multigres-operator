@@ -83,3 +83,12 @@ func SetShardPostureInconsistent(cluster, shard, namespace string, inconsistent 
 	}
 	shardPostureInconsistent.WithLabelValues(cluster, shard, namespace).Set(val)
 }
+
+// SetShardHasPrimary records whether any pod of the Shard holds the PRIMARY role.
+func SetShardHasPrimary(cluster, shard, namespace string, hasPrimary bool) {
+	val := 0.0
+	if hasPrimary {
+		val = 1.0
+	}
+	shardHasPrimary.WithLabelValues(cluster, shard, namespace).Set(val)
+}

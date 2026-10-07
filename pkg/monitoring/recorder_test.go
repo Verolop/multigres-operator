@@ -220,6 +220,20 @@ func TestSetRollingUpdateInProgress(t *testing.T) {
 
 // --- helpers ---
 
+func TestSetShardHasPrimary(t *testing.T) {
+	t.Cleanup(func() { shardHasPrimary.Reset() })
+
+	SetShardHasPrimary("cluster-1", "shard-1", "default", true)
+	if val := gaugeValue(t, shardHasPrimary, "cluster-1", "shard-1", "default"); val != 1 {
+		t.Errorf("expected shardHasPrimary=1 when true, got %f", val)
+	}
+
+	SetShardHasPrimary("cluster-1", "shard-1", "default", false)
+	if val := gaugeValue(t, shardHasPrimary, "cluster-1", "shard-1", "default"); val != 0 {
+		t.Errorf("expected shardHasPrimary=0 when false, got %f", val)
+	}
+}
+
 func gaugeValue(t *testing.T, vec *prometheus.GaugeVec, labels ...string) float64 {
 	t.Helper()
 	g, err := vec.GetMetricWithLabelValues(labels...)

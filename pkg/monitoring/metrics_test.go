@@ -72,6 +72,11 @@ func TestGaugeLabels(t *testing.T) {
 			wantLabels: []string{"shard", "pool", "namespace", "state"},
 		},
 		{
+			name:       "shardHasPrimary",
+			collector:  shardHasPrimary,
+			wantLabels: []string{"cluster", "shard", "namespace"},
+		},
+		{
 			name:       "toposerverReplicas",
 			collector:  toposerverReplicas,
 			wantLabels: []string{"name", "namespace", "state"},

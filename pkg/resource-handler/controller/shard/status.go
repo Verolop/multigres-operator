@@ -98,6 +98,13 @@ func (r *ShardReconciler) updateStatus(
 		)
 	}
 
+	monitoring.SetShardHasPrimary(
+		shard.Labels[metadata.LabelMultigresCluster],
+		shard.Name,
+		shard.Namespace,
+		hasPrimary(shard.Status.PodRoles),
+	)
+
 	// Update conditions
 	r.setConditions(shard, pools.totalPods, pools.readyPods)
 
