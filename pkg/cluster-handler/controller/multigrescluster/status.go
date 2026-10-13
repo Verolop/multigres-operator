@@ -220,7 +220,8 @@ func (r *MultigresClusterReconciler) updateStatus(
 			}] = struct{}{}
 		}
 	}
-	expectsGlobalTopoServer := globalTopoSpec.Etcd != nil
+	wantsManagedGlobalTopo := globalTopoSpec.Etcd != nil
+	expectsGlobalTopoServer := wantsManagedGlobalTopo
 
 	for _, c := range cells.Items {
 		delete(expectedCells, c.Spec.Name)
@@ -266,6 +267,15 @@ func (r *MultigresClusterReconciler) updateStatus(
 	}
 
 	for _, ts := range topoServers.Items {
+		// A managed global TopoServer the spec no longer wants is being retired
+		// after a move to an external topology, and its health says nothing
+		// about the cluster's. Counted, an unhealthy one would keep the cluster
+		// from Healthy, which retireManagedGlobalTopo waits on, and so hold back
+		// its own retirement after the workloads had moved.
+		if !wantsManagedGlobalTopo && ts.Name == cluster.Name+"-global-topo" &&
+			metav1.IsControlledBy(&ts, cluster) {
+			continue
+		}
 		if expectsGlobalTopoServer && ts.Name == cluster.Name+"-global-topo" {
 			expectsGlobalTopoServer = false
 		}

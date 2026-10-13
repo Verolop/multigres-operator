@@ -895,3 +895,77 @@ func TestGetPoolerStatus(t *testing.T) {
 		}
 	})
 }
+
+func TestLivePoolerPods(t *testing.T) {
+	t.Parallel()
+
+	shard := &multigresv1alpha1.Shard{
+		Spec: multigresv1alpha1.ShardSpec{
+			DatabaseName: "db", TableGroupName: "tg", ShardName: "0",
+			Pools: map[multigresv1alpha1.PoolName]multigresv1alpha1.PoolSpec{
+				"pool1": {Cells: []multigresv1alpha1.CellName{"cell1"}},
+			},
+		},
+	}
+	key := &clustermetadata.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
+
+	t.Run("reports live registrations only", func(t *testing.T) {
+		t.Parallel()
+		_, factory := memorytopo.NewServerAndFactory(t.Context(), "cell1")
+		store := topoclient.NewWithFactory(
+			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
+		)
+		defer func() { _ = store.Close() }()
+		ctx := t.Context()
+
+		for _, mp := range []*clustermetadata.Multipooler{
+			{Id: &clustermetadata.ID{Cell: "cell1", Name: "live"}, Hostname: "live", ShardKey: key},
+			{
+				// Registered under a service ID, found by its FQDN hostname.
+				Id:       &clustermetadata.ID{Cell: "cell1", Name: "p-1234"},
+				Hostname: "fqdn.pool.ns.svc.cluster.local",
+				ShardKey: key,
+			},
+			{
+				Id: &clustermetadata.ID{Cell: "cell1", Name: "gone"}, Hostname: "gone", ShardKey: key,
+				LifecycleStatus: &clustermetadata.PoolerLifecycle{
+					Status: clustermetadata.PoolerLifecycleStatus_LIFECYCLE_SHUTDOWN,
+				},
+			},
+			{
+				Id: &clustermetadata.ID{Cell: "cell1", Name: "other-shard"}, Hostname: "other-shard",
+				ShardKey: &clustermetadata.ShardKey{Database: "db", TableGroup: "tg", Shard: "1"},
+			},
+		} {
+			if err := store.RegisterMultipooler(ctx, mp, false); err != nil {
+				t.Fatalf("register %s: %v", mp.Id.Name, err)
+			}
+		}
+
+		live, err := topo.LivePoolerPods(ctx, store, shard,
+			[]string{"live", "fqdn", "gone", "other-shard", "absent"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := map[string]bool{"live": true, "fqdn": true}
+		if len(live) != len(want) || !live["live"] || !live["fqdn"] {
+			t.Errorf("LivePoolerPods = %v, want %v", live, want)
+		}
+	})
+
+	t.Run("returns an unreadable cell as an error, not as empty", func(t *testing.T) {
+		t.Parallel()
+		// The store knows no cell1, so listing it fails; a caller using
+		// absence as evidence must see that.
+		_, factory := memorytopo.NewServerAndFactory(t.Context(), "other-cell")
+		store := topoclient.NewWithFactory(
+			factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
+		)
+		defer func() { _ = store.Close() }()
+
+		live, err := topo.LivePoolerPods(t.Context(), store, shard, []string{"live"})
+		if err == nil {
+			t.Fatalf("want an error for an unreadable cell, got %v", live)
+		}
+	})
+}

@@ -20,6 +20,7 @@ import (
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	"github.com/multigres/multigres-operator/pkg/resolver"
 	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
+	toposervercontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/toposerver"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	"github.com/multigres/multigres-operator/pkg/util/name"
 	"github.com/multigres/testkit/ctrltest"
@@ -223,8 +224,12 @@ func (c *C) drainStateSeen() error {
 // the operator's writes and not about the fake's pacing.
 func (c *C) poolPodFingerprints() map[string]string {
 	c.Helper()
+	// Pool pods only: the data plane sim also runs the gateway, multiorch,
+	// multiadmin and etcd workloads' pods, which no pool claim is about.
 	pods := &corev1.PodList{}
-	c.NoError(c.List(pods), "list pods in %s", c.NS)
+	c.NoError(c.List(pods, client.MatchingLabels{
+		metadata.LabelAppComponent: shardcontroller.PoolComponentName,
+	}), "list pool pods in %s", c.NS)
 	out := make(map[string]string, len(pods.Items))
 	for i := range pods.Items {
 		p := &pods.Items[i]
@@ -518,11 +523,24 @@ func TestShardLifecycle(t *testing.T) {
 	// it says the converged pool's storage is those three claims and nothing
 	// else, so a fourth PVC or a misnamed one fails here instead of being
 	// permitted by whatever happened to exist.
-	s.Step("the converged pool's PVCs replay as the baseline", nil,
+	//
+	// The global topology's etcd claims replay too: the data plane sim
+	// creates them from the TopoServer StatefulSet's claim template, one per
+	// replica. Their names come from the same template constants, for the
+	// same reason.
+	baseline := []ctrltest.Allow{
 		ctrltest.Added("PersistentVolumeClaim", pvc0),
 		ctrltest.Added("PersistentVolumeClaim", pvc1),
 		ctrltest.Added("PersistentVolumeClaim", backupPVC),
-	)
+	}
+	for i := range toposervercontroller.DefaultReplicas {
+		baseline = append(
+			baseline,
+			ctrltest.Added("PersistentVolumeClaim", fmt.Sprintf("%s-%s-global-topo-%d",
+				toposervercontroller.DataVolumeName, clusterName, i)),
+		)
+	}
+	s.Step("the converged pool's PVCs replay as the baseline", nil, baseline...)
 
 	s.Step("cluster settles before any change", nil, ctrltest.Quiet())
 

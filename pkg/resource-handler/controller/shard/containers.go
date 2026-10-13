@@ -519,6 +519,13 @@ func BuildPoolServiceID(podName string) string {
 	return "p-" + nameutil.Hash([]string{podName})
 }
 
+const (
+	multipoolerContainerName = "multipooler"
+
+	topoGlobalAddressFlag = "--topo-global-server-addresses="
+	topoGlobalRootFlag    = "--topo-global-root="
+)
+
 // buildMultipoolerContainer creates the multipooler container spec.
 // Runs as a regular (non-sidecar) container so it receives SIGTERM before
 // pgctld and can call pgctld.Stop() during its graceful shutdown; see
@@ -542,8 +549,8 @@ func buildMultipoolerContainer(
 		"--pooler-dir=" + PoolerDirMountPath,
 		"--socket-file=" + PostgresSocketPath, // Unix socket path; auth is controlled by pg_hba.
 		"--service-map=grpc-pooler",           // Only enable grpc-pooler service (disables auto-restore service)
-		"--topo-global-server-addresses=" + shard.Spec.GlobalTopoServer.Address,
-		"--topo-global-root=" + shard.Spec.GlobalTopoServer.RootPath,
+		topoGlobalAddressFlag + shard.Spec.GlobalTopoServer.Address,
+		topoGlobalRootFlag + shard.Spec.GlobalTopoServer.RootPath,
 		"--cell=" + cellName,
 		"--database=" + string(shard.Spec.DatabaseName),
 		"--table-group=" + string(shard.Spec.TableGroupName),
@@ -584,7 +591,7 @@ func buildMultipoolerContainer(
 	}
 
 	c := corev1.Container{
-		Name:            "multipooler",
+		Name:            multipoolerContainerName,
 		Image:           image,
 		Args:            args,
 		Ports:           buildMultipoolerContainerPorts(),
@@ -692,8 +699,8 @@ func buildMultiorchContainer(shard *multigresv1alpha1.Shard, cellName string) co
 		"multiorch", // Subcommand
 		"--http-port=15300",
 		"--grpc-port=15370",
-		"--topo-global-server-addresses=" + shard.Spec.GlobalTopoServer.Address,
-		"--topo-global-root=" + shard.Spec.GlobalTopoServer.RootPath,
+		topoGlobalAddressFlag + shard.Spec.GlobalTopoServer.Address,
+		topoGlobalRootFlag + shard.Spec.GlobalTopoServer.RootPath,
 		"--cell=" + cellName,
 		"--watch-targets=" + watchTarget,
 		"--log-level=" + string(shard.Spec.LogLevels.Multiorch),

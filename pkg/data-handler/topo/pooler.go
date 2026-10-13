@@ -305,6 +305,38 @@ func MarkDeadPoolers(
 	return marked, nil
 }
 
+// LivePoolerPods returns which of podNames have a pooler registered for shard
+// in store that is not LIFECYCLE_SHUTDOWN, across every cell the shard uses.
+//
+// Unlike the other readers here it skips nothing on error: a caller that
+// treats a pod's absence as evidence must not mistake an unreadable cell, or
+// an unavailable topology, for an empty one.
+func LivePoolerPods(
+	ctx context.Context,
+	store topoclient.Store,
+	shard *multigresv1alpha1.Shard,
+	podNames []string,
+) (map[string]bool, error) {
+	live := make(map[string]bool, len(podNames))
+	for _, cell := range CollectCells(shard) {
+		poolers, err := store.GetMultipoolersByCell(ctx, cell, ShardFilter(shard))
+		if err != nil {
+			return nil, fmt.Errorf("listing poolers in cell %q: %w", cell, err)
+		}
+		for _, p := range poolers {
+			if isLifecycleShutdown(p.Multipooler) {
+				continue
+			}
+			for _, name := range podNames {
+				if PodMatchesPooler(name, p) {
+					live[name] = true
+				}
+			}
+		}
+	}
+	return live, nil
+}
+
 // isLifecycleShutdown reports whether the pooler is already recorded as shut
 // down in topology.
 func isLifecycleShutdown(mp *clustermetadatapb.Multipooler) bool {

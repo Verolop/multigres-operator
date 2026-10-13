@@ -407,9 +407,10 @@ func TestSelectorImpostorGlobalTopoPruneDeletesCellOwnedLocalTopoServer(t *testi
 		},
 		// The toposerver controller's whole settling sequence on a TopoServer
 		// it has just been handed: the first condition, then the client and
-		// peer endpoints once the etcd StatefulSet exists, then Ready once
-		// DataPlaneSim has ticked that StatefulSet ready. Three writes, in
-		// that order, then quiet indefinitely.
+		// peer endpoints once the etcd StatefulSet exists, then the
+		// StatefulSet's pods existing but none Ready yet (DataPlaneSim holds
+		// a new pod Pending for one sweep, as kubelet would), then Ready once
+		// they are. Four writes, in that order, then quiet indefinitely.
 		//
 		// The paths are the narrowest that pick out one write each.
 		// status.conditions[0] belongs only to the first and
@@ -425,6 +426,8 @@ func TestSelectorImpostorGlobalTopoPruneDeletesCellOwnedLocalTopoServer(t *testi
 		ctrltest.Changed("TopoServer", localTopoName, "status.conditions[0].type"),
 		ctrltest.Changed("TopoServer", localTopoName,
 			"status.clientService", "status.peerService"),
+		ctrltest.Changed("TopoServer", localTopoName,
+			"status.conditions[1].message", "status.message"),
 		ctrltest.Changed("TopoServer", localTopoName, "status.phase"),
 	)
 	c.NoError(stepErr, "the cell's local TopoServer did not settle as declared")

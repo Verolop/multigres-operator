@@ -185,8 +185,15 @@ func testPVCDeletionPolicyRoundTrip(t *testing.T) {
 
 	original := cluster.Spec.PVCDeletionPolicy.DeepCopy()
 
+	// The policy reaches the shard's claims through reconcilePVCOwnerRefs. The
+	// global topology's etcd claims are created by its StatefulSet, which
+	// always retains them whatever the policy says, so changing the policy
+	// does not touch them.
 	consequences := make([]ctrltest.Allow, 0, len(pvcNames))
 	for _, name := range pvcNames {
+		if strings.Contains(name, "-global-topo-") {
+			continue
+		}
 		consequences = append(consequences, ctrltest.Changed("PersistentVolumeClaim", name))
 	}
 

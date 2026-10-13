@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/data-handler/topo"
 	"github.com/multigres/multigres-operator/pkg/images"
 	"github.com/multigres/multigres-operator/pkg/monitoring"
 	"github.com/multigres/multigres-operator/pkg/resolver"
@@ -63,6 +64,14 @@ type MultigresClusterReconciler struct {
 
 	// CreateTopoStore overrides the default topology store factory for testing.
 	CreateTopoStore func(multigresv1alpha1.GlobalTopoServerRef) (topoclient.Store, error)
+
+	// ReadEtcdIdentity overrides how the etcd behind a topology reference is
+	// identified, for testing. Defaults to topo.ReadEtcdIdentity.
+	ReadEtcdIdentity func(
+		ctx context.Context,
+		namespace string,
+		ref multigresv1alpha1.GlobalTopoServerRef,
+	) (topo.EtcdIdentity, error)
 }
 
 // Reconcile resolves templates, reconciles child resources (Cells, TableGroups, TopoServer),
@@ -344,6 +353,27 @@ func (r *MultigresClusterReconciler) Reconcile(
 		childSpan.End()
 	}
 
+	// After updateStatus, because retiring the managed global topology waits on
+	// the Healthy phase it just computed, and after reconcileTopology, which
+	// has by now registered every cell and database in the external topology.
+	// Skipped while cells or databases are still being deleted: the cluster is
+	// not settled.
+	var retireResult ctrl.Result
+	if !pendingCells && !pendingDBs {
+		ctx, childSpan := monitoring.StartChildSpan(ctx, "MultigresCluster.RetireManagedGlobalTopo")
+		var err error
+		retireResult, err = r.retireManagedGlobalTopo(ctx, cluster, res)
+		if err != nil {
+			monitoring.RecordSpanError(childSpan, err)
+			childSpan.End()
+			l.Error(err, "Failed to retire managed global topology")
+			r.Recorder.Eventf(cluster, "Warning", "FailedApply",
+				"Failed to retire managed global topology: %v", err)
+			return ctrl.Result{}, err
+		}
+		childSpan.End()
+	}
+
 	// Emit cluster-level metrics
 	monitoring.SetClusterInfo(
 		cluster.Name,
@@ -370,7 +400,7 @@ func (r *MultigresClusterReconciler) Reconcile(
 
 	l.V(1).Info("reconcile complete", "duration", time.Since(start).String())
 	r.Recorder.Event(cluster, "Normal", "Synced", "Successfully reconciled MultigresCluster")
-	return ctrl.Result{}, nil
+	return retireResult, nil
 }
 
 func (r *MultigresClusterReconciler) ensureClusterFinalizer(

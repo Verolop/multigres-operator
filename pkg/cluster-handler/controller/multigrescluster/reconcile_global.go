@@ -13,7 +13,6 @@ import (
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 	"github.com/multigres/multigres-operator/pkg/resolver"
-	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
 
 // Builder function variables to allow mocking in tests
@@ -106,37 +105,10 @@ func (r *MultigresClusterReconciler) reconcileGlobalTopoServer(
 		return fmt.Errorf("failed to build global topo server: %w", err)
 	}
 
-	// If desired is nil, it means we don't need a managed TopoServer (e.g. external).
-	// Clean up any existing managed TopoServer that may be left over from a mode switch.
-	//
-	// The list selector requires the global-topo component in addition to the
-	// cluster label, and each delete below also requires controller ownership
-	// by this cluster. A cell's own local TopoServer carries the same cluster
-	// label but is controller-owned by the Cell, not the cluster, so the label
-	// alone would not spare it: a selector on the cluster label alone matched
-	// it too and deleted it.
+	// No managed TopoServer is wanted (the cluster uses an external one). One
+	// left from before a move to external is retired by
+	// retireManagedGlobalTopo, once the move has finished, not here.
 	if desired == nil {
-		existing := &multigresv1alpha1.TopoServerList{}
-		if err := r.List(ctx, existing,
-			client.InNamespace(cluster.Namespace),
-			client.MatchingLabels{
-				metadata.LabelMultigresCluster: cluster.Name,
-				metadata.LabelAppComponent:     metadata.ComponentGlobalTopo,
-			},
-		); err != nil {
-			return fmt.Errorf("failed to list existing topo servers: %w", err)
-		}
-		for i := range existing.Items {
-			if !metav1.IsControlledBy(&existing.Items[i], cluster) {
-				continue
-			}
-			if err := r.Delete(ctx, &existing.Items[i]); err != nil && !errors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete stale topo server %s: %w",
-					existing.Items[i].Name, err)
-			}
-			r.Recorder.Eventf(cluster, "Normal", "Deleted",
-				"Deleted stale TopoServer %s (switched to external)", existing.Items[i].Name)
-		}
 		return nil
 	}
 
@@ -238,7 +210,7 @@ func (r *MultigresClusterReconciler) globalTopoRef(
 
 	address := ""
 	if spec.Etcd != nil {
-		address = fmt.Sprintf("%s-global-topo.%s.svc:2379", cluster.Name, cluster.Namespace)
+		address = managedGlobalTopoAddress(cluster)
 	} else if spec.External != nil && len(spec.External.Endpoints) > 0 {
 		address = string(spec.External.Endpoints[0])
 	}
