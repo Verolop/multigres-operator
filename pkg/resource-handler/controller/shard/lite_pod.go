@@ -50,7 +50,9 @@ func BuildLitePod(
 	}}, volumes...)
 
 	annotations := map[string]string{
-		metadata.AnnotationSpecHash: "", // placeholder, computed below
+		metadata.AnnotationSpecHash:                      "", // placeholder, computed below
+		"karpenter.sh/do-not-disrupt":                    "true",
+		"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
 		metadata.AnnotationProjectRef: metadata.ResolveProjectRef(
 			shard.Annotations,
 			clusterName,
@@ -104,5 +106,21 @@ func BuildLitePod(
 		return nil, fmt.Errorf("failed to set controller reference: %w", err)
 	}
 
+	return pod, nil
+}
+
+// buildLitePod applies operator placement policy to the shared desired pod used
+// by reconciliation and status, so both compare the same spec hash.
+func (r *ShardReconciler) buildLitePod(
+	shard *multigresv1alpha1.Shard,
+	poolName, cellName string,
+	poolSpec multigresv1alpha1.PoolSpec,
+) (*corev1.Pod, error) {
+	pod, err := BuildLitePod(shard, poolName, cellName, poolSpec, r.Scheme)
+	if err != nil {
+		return nil, err
+	}
+	pod.Spec.PriorityClassName = r.LitePodPriorityClassName
+	pod.Annotations[metadata.AnnotationSpecHash] = ComputeSpecHash(pod)
 	return pod, nil
 }

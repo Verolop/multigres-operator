@@ -203,7 +203,7 @@ func (r *ShardReconciler) liteUpToDateCondition(
 	}
 	desiredShard.Annotations[metadata.AnnotationPostgresConfigHash] = rendered.restartHash
 	desiredShard.Annotations[metadata.AnnotationPostgresReloadHash] = rendered.reloadHash
-	desired, err := BuildLitePod(desiredShard, poolName, cellName, poolSpec, r.Scheme)
+	desired, err := r.buildLitePod(desiredShard, poolName, cellName, poolSpec)
 	if err != nil {
 		cond.Reason = "BuildFailed"
 		cond.Message = fmt.Sprintf("Failed to build the desired Lite pod: %v", err)

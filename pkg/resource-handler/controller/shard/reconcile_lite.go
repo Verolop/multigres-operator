@@ -230,7 +230,7 @@ func (r *ShardReconciler) ensureLitePod(
 ) error {
 	logger := log.FromContext(ctx)
 
-	desired, err := BuildLitePod(shard, poolName, cellName, poolSpec, r.Scheme)
+	desired, err := r.buildLitePod(shard, poolName, cellName, poolSpec)
 	if err != nil {
 		return fmt.Errorf("failed to build Lite pod: %w", err)
 	}

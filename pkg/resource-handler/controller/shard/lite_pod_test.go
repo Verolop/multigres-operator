@@ -284,3 +284,34 @@ func TestBuildLitePod_SpecHashFollowsRestartConfig(t *testing.T) {
 		t.Error("spec-hash did not change with the restart config hash")
 	}
 }
+
+func TestLitePodPriorityPolicyTriggersDrift(t *testing.T) {
+	r := &ShardReconciler{Scheme: testScheme()}
+	shard, pool := newTestLiteShard(), newTestPoolSpec()
+	before, err := r.buildLitePod(shard, "main", "z1", pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.LitePodPriorityClassName = "lite-database"
+	after, err := r.buildLitePod(shard, "main", "z1", pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Spec.PriorityClassName != "lite-database" {
+		t.Fatalf("priority class = %q", after.Spec.PriorityClassName)
+	}
+	if before.Annotations[metadata.AnnotationSpecHash] == after.Annotations[metadata.AnnotationSpecHash] {
+		t.Fatal("changing the priority class must trigger Lite pod replacement")
+	}
+	if after.Annotations[metadata.AnnotationSpecHash] != ComputeSpecHash(after) {
+		t.Fatal("desired-pod hash does not include the applied priority policy")
+	}
+	for key, want := range map[string]string{
+		"karpenter.sh/do-not-disrupt":                    "true",
+		"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+	} {
+		if after.Annotations[key] != want {
+			t.Errorf("annotation %s = %q, want %q", key, after.Annotations[key], want)
+		}
+	}
+}
