@@ -118,8 +118,9 @@ func (r *CellReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: localTopoServerRecheckDelay}, nil
 	}
 
-	// Reconcile Multigateway Deployment
-	{
+	// Reconcile Multigateway Deployment. A Lite cell has none: the gateway
+	// runs inside the shard's Lite pod.
+	if cell.Spec.Mode != multigresv1alpha1.ModeLite {
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "Cell.ReconcileDeployment")
 		if err := r.reconcileMultigatewayDeployment(ctx, cell); err != nil {
 			monitoring.RecordSpanError(childSpan, err)

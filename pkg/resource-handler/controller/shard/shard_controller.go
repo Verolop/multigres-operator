@@ -309,6 +309,12 @@ func (r *ShardReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: storageClassDependencyRequeue}, nil
 	}
 
+	// A Lite shard skips everything below: multiorch, the PDB, pool rollouts
+	// and the data-plane phase.
+	if shard.Spec.Mode == multigresv1alpha1.ModeLite {
+		return r.reconcileLite(ctx, shard, renderedCfg, storageClasses)
+	}
+
 	// Reconcile Multiorch - one Deployment and Service per cell
 	{
 		ctx, childSpan := monitoring.StartChildSpan(ctx, "Shard.ReconcileMultiorch")
