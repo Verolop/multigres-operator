@@ -730,6 +730,16 @@ func buildLiteContainer(
 			"--grpc-key", ShardTLSKeyFile,
 			"--grpc-ca", ShardTLSCAFile,
 			"--grpc-server-ca", ShardTLSCAFile,
+			"--multipooler-grpc-cert", ShardTLSCertFile,
+			"--multipooler-grpc-key", ShardTLSKeyFile,
+			"--multipooler-grpc-ca", ShardTLSCAFile,
+			"--multipooler-grpc-server-name",
+			multigresv1alpha1.ComponentCertCommonName(
+				multigresv1alpha1.ComponentMultiPoolerTLS,
+				shard.Labels[metadata.LabelMultigresCluster],
+				shard.Namespace,
+			),
+			"--multipooler-grpc-require-tls",
 		)
 	}
 	if multigresv1alpha1.TopoClientTLSConfigured(shard.Spec.GlobalTopoServer) {

@@ -26,7 +26,7 @@ const litePrimaryTimeout = 5 * time.Second
 // pod as a pool of one, so PoolsReady, ReadyReplicas and Phase roll up through
 // the TableGroup as they do for any other shard, and sets three conditions:
 // Available from the pod's readiness, Primary from the pooler's own routing
-// role, and UpToDate from the pod's spec-hash.
+// role, and UpToDate from the pod's spec-hash and confirmed reload-hash.
 func (r *ShardReconciler) updateLiteStatus(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
@@ -50,7 +50,8 @@ func (r *ShardReconciler) updateLiteStatus(
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get pod %s for status: %w", podName, err)
 		}
-	} else if existing.DeletionTimestamp.IsZero() {
+	} else if existing.DeletionTimestamp.IsZero() &&
+		existing.Status.Phase != corev1.PodFailed && existing.Status.Phase != corev1.PodSucceeded {
 		pod = existing
 	}
 
@@ -213,6 +214,11 @@ func (r *ShardReconciler) liteUpToDateCondition(
 	if pod.Annotations[metadata.AnnotationSpecHash] != desired.Annotations[metadata.AnnotationSpecHash] {
 		cond.Reason = "SpecChanged"
 		cond.Message = "The Lite pod does not match the desired spec and will be replaced"
+		return cond
+	}
+	if pod.Annotations[metadata.AnnotationPostgresReloadHash] != rendered.reloadHash {
+		cond.Reason = "ReloadPending"
+		cond.Message = "Waiting for the Lite pooler to confirm the PostgreSQL config reload"
 		return cond
 	}
 	cond.Status = metav1.ConditionTrue

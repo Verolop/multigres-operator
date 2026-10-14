@@ -109,6 +109,14 @@ func (r *ShardReconciler) reconcileLite(
 		return ctrl.Result{}, err
 	}
 
+	wait, err := r.reconcileLiteReload(ctx, shard, rendered)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if wait > 0 {
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+
 	if !meta.IsStatusConditionTrue(shard.Status.Conditions, multigresv1alpha1.ConditionPrimary) {
 		return ctrl.Result{RequeueAfter: litePrimaryRequeue}, nil
 	}
@@ -174,9 +182,8 @@ func (r *ShardReconciler) registerLiteDatabase(
 	return true, nil
 }
 
-// ensureLiteDataPVC creates the Lite pod's data PVC when it is missing. It never
-// deletes it: removal follows the PVC deletion policy when the Shard is
-// deleted.
+// ensureLiteDataPVC creates or expands the Lite pod's data PVC. It never
+// deletes it: removal follows the PVC deletion policy when the Shard is deleted.
 func (r *ShardReconciler) ensureLiteDataPVC(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
@@ -184,10 +191,10 @@ func (r *ShardReconciler) ensureLiteDataPVC(
 	poolSpec multigresv1alpha1.PoolSpec,
 ) error {
 	name := BuildPoolDataPVCName(shard, poolName, cellName, 0)
-	err := r.Get(ctx, client.ObjectKey{Namespace: shard.Namespace, Name: name},
-		&corev1.PersistentVolumeClaim{})
+	existing := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: shard.Namespace, Name: name}, existing)
 	if err == nil {
-		return nil
+		return r.expandPVCIfNeeded(ctx, shard, existing, poolSpec)
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to get PVC %s: %w", name, err)
@@ -218,9 +225,9 @@ func (r *ShardReconciler) ensureLiteDataPVC(
 	return nil
 }
 
-// ensureLitePod creates the Lite pod when it is missing and deletes it when its
-// spec-hash annotation no longer matches the desired pod, so the next reconcile
-// creates it again. There is no disruption preflight and no drain: the pod is
+// ensureLitePod creates the Lite pod when it is missing and deletes it when it
+// is terminal or its spec-hash no longer matches, so the next reconcile creates
+// it again. There is no disruption preflight and no drain: the pod is
 // the shard's only pooler, so there is no cohort to protect.
 func (r *ShardReconciler) ensureLitePod(
 	ctx context.Context,
@@ -254,13 +261,17 @@ func (r *ShardReconciler) ensureLitePod(
 	if !existing.DeletionTimestamp.IsZero() {
 		return nil
 	}
-	if existing.Annotations[metadata.AnnotationSpecHash] ==
+	reason := "apply a spec change"
+	if existing.Status.Phase == corev1.PodFailed || existing.Status.Phase == corev1.PodSucceeded {
+		reason = "replace a terminal pod"
+	} else if existing.Annotations[metadata.AnnotationSpecHash] ==
 		desired.Annotations[metadata.AnnotationSpecHash] {
 		return nil
 	}
 
 	logger.Info(
-		"Deleting Lite pod to apply a spec change",
+		"Deleting Lite pod",
+		"reason", reason,
 		"pod", existing.Name,
 		"currentHash", existing.Annotations[metadata.AnnotationSpecHash],
 		"desiredHash", desired.Annotations[metadata.AnnotationSpecHash],
@@ -276,8 +287,40 @@ func (r *ShardReconciler) ensureLitePod(
 		shard,
 		"Normal",
 		"PodReplaced",
-		"Deleted pod %s to apply a spec change",
+		"Deleted pod %s to %s",
 		existing.Name,
+		reason,
 	)
 	return nil
+}
+
+// reconcileLiteReload uses the same verified ReloadConfig path as a full shard,
+// without running the other data-plane phases that require a replica cohort.
+func (r *ShardReconciler) reconcileLiteReload(
+	ctx context.Context,
+	shard *multigresv1alpha1.Shard,
+	rendered renderedConfig,
+) (time.Duration, error) {
+	if rendered.reloadHash == "" || rendered.err != nil {
+		return 0, nil
+	}
+	if r.PoolerClients == nil {
+		return reloadRetryDelay, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, liteTopoTimeout)
+	defer cancel()
+	rpc, err := r.PoolerClients.ClientFor(ctx, shard)
+	if err != nil || rpc == nil {
+		log.FromContext(ctx).Info("Waiting for the Lite reload RPC client", "error", err)
+		return reloadRetryDelay, nil
+	}
+	store, err := r.topoStore(ctx, shard)
+	if err != nil {
+		if topo.IsTopoUnavailable(err) {
+			return reloadRetryDelay, nil
+		}
+		return 0, fmt.Errorf("open topology for Lite config reload: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	return r.reconcileReloadState(ctx, store, shard, rendered, rpc)
 }
