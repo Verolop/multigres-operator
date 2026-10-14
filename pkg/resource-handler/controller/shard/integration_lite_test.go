@@ -165,6 +165,7 @@ func TestReconcileLite(t *testing.T) {
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	require.NoError(t, k8sClient.Get(ctx, pvcKey, pvc))
+	originalPVCUID := pvc.UID
 	require.Equal(t,
 		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod},
 		pvc.Spec.AccessModes,
@@ -198,6 +199,34 @@ func TestReconcileLite(t *testing.T) {
 			pod.Annotations[metadata.AnnotationSpecHash] == evictedHash
 	}, 30*time.Second, 200*time.Millisecond, "evicted Lite pod was not replaced")
 
+	// A CSI filesystem-resize condition must trigger replacement even when
+	// the desired pod hash is unchanged.
+	beforeResizeUID := pod.UID
+	beforeResizeHash := pod.Annotations[metadata.AnnotationSpecHash]
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+	}
+	require.NoError(t, k8sClient.Status().Update(ctx, pod))
+	require.NoError(t, k8sClient.Get(ctx, pvcKey, pvc))
+	pvc.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{
+		Type:   corev1.PersistentVolumeClaimFileSystemResizePending,
+		Status: corev1.ConditionTrue,
+	}}
+	require.NoError(t, k8sClient.Status().Update(ctx, pvc))
+	require.Eventually(t, func() bool {
+		return k8sClient.Get(ctx, podKey, pod) == nil && pod.UID != beforeResizeUID &&
+			pod.Annotations[metadata.AnnotationSpecHash] == beforeResizeHash
+	}, 30*time.Second, 200*time.Millisecond, "Lite pod was not replaced for filesystem expansion")
+	resizeReplacementUID := pod.UID
+	require.Never(t, func() bool {
+		return k8sClient.Get(ctx, podKey, pod) != nil || pod.UID != resizeReplacementUID ||
+			!pod.DeletionTimestamp.IsZero()
+	}, time.Second, 100*time.Millisecond, "replacement was deleted before it could mount the volume")
+	require.NoError(t, k8sClient.Get(ctx, pvcKey, pvc))
+	pvc.Status.Conditions = nil
+	require.NoError(t, k8sClient.Status().Update(ctx, pvc))
+
 	// A spec change that moves the spec-hash replaces the pod.
 	originalUID := pod.UID
 	originalHash := pod.Annotations[metadata.AnnotationSpecHash]
@@ -224,7 +253,7 @@ func TestReconcileLite(t *testing.T) {
 	// The data PVC survives the replacement.
 	replacedPVC := &corev1.PersistentVolumeClaim{}
 	require.NoError(t, k8sClient.Get(ctx, pvcKey, replacedPVC))
-	require.Equal(t, pvc.UID, replacedPVC.UID)
+	require.Equal(t, originalPVCUID, replacedPVC.UID)
 
 	// Deletion runs the shared handleDeletion path, which removes the pod and
 	// then the finalizer without a multiorch or PDB to wait for.

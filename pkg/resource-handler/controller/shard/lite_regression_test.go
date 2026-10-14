@@ -87,10 +87,19 @@ func TestLiteExistingPVCExpandsInPlace(t *testing.T) {
 			require.NoError(t, err)
 			pvc.UID = "existing-volume"
 			pvc.Spec.VolumeName = "bound-volume"
+			pvc.Status.Capacity = corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("10Gi"),
+			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pvc).Build()
 			r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 			pool.Storage.Size = size
-			require.NoError(t, r.ensureLiteDataPVC(t.Context(), shard, "main", "z1", pool))
+			wait, err := r.ensureLiteDataPVC(t.Context(), shard, "main", "z1", pool)
+			require.NoError(t, err)
+			if size == "20Gi" {
+				require.Equal(t, liteStorageRequeue, wait)
+			} else {
+				require.Zero(t, wait)
+			}
 			got := &corev1.PersistentVolumeClaim{}
 			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pvc), got))
 			want := "10Gi"
@@ -101,6 +110,98 @@ func TestLiteExistingPVCExpandsInPlace(t *testing.T) {
 			require.Equal(t, pvc.UID, got.UID)
 			require.Equal(t, pvc.Spec.VolumeName, got.Spec.VolumeName)
 			require.Equal(t, pvc.Spec.AccessModes, got.Spec.AccessModes)
+		})
+	}
+}
+
+func TestLiteFilesystemResizeReplacesReadyPod(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		condition   corev1.ConditionStatus
+		ready       bool
+		terminating bool
+		replace     bool
+	}{
+		{name: "pending resize", condition: corev1.ConditionTrue, ready: true, replace: true},
+		{name: "resize complete", condition: corev1.ConditionFalse, ready: true},
+		{name: "resize unknown", condition: corev1.ConditionUnknown, ready: true},
+		{name: "no resize condition", ready: true},
+		{name: "pod still starting", condition: corev1.ConditionTrue},
+		{name: "pod already terminating", condition: corev1.ConditionTrue, ready: true, terminating: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			shard, pool := newTestLiteShard(), newTestPoolSpec()
+			scheme := reloadTestScheme(t)
+			pod, err := BuildLitePod(shard, "main", "z1", pool, scheme)
+			require.NoError(t, err)
+			pod.UID = "original-pod"
+			if tt.ready {
+				pod.Status.Phase = corev1.PodRunning
+				pod.Status.Conditions = []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				}
+			}
+			if tt.terminating {
+				pod.DeletionTimestamp = ptr.To(metav1.Now())
+				pod.Finalizers = []string{"example.com/test-finalizer"}
+			}
+			pvc, err := BuildPoolDataPVC(shard, "main", "z1", pool, 0, false, scheme)
+			require.NoError(t, err)
+			pvc.UID = "original-pvc"
+			pvc.Status.Capacity = corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("20Gi"),
+			}
+			if tt.condition != "" {
+				pvc.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{
+					Type:   corev1.PersistentVolumeClaimFileSystemResizePending,
+					Status: tt.condition,
+				}}
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod, pvc).Build()
+			r := &ShardReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+			pool.Storage.Size = "20Gi"
+			wait, err := r.ensureLiteDataPVC(ctx, shard, "main", "z1", pool)
+			require.NoError(t, err)
+			if tt.condition == corev1.ConditionTrue {
+				require.Equal(t, liteStorageRequeue, wait)
+			} else {
+				require.Zero(t, wait)
+			}
+			require.NoError(t, r.ensureLitePod(ctx, shard, "main", "z1", pool))
+			current := &corev1.Pod{}
+			err = c.Get(ctx, client.ObjectKeyFromObject(pod), current)
+			if tt.replace {
+				require.True(
+					t,
+					apierrors.IsNotFound(err),
+					"ready pod must restart for a pending filesystem resize: %v",
+					err,
+				)
+				require.NoError(t, r.ensureLitePod(ctx, shard, "main", "z1", pool))
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(pod), current))
+				require.NotEqual(t, pod.UID, current.UID)
+				require.Equal(
+					t,
+					pod.Annotations[metadata.AnnotationSpecHash],
+					current.Annotations[metadata.AnnotationSpecHash],
+				)
+				// The CSI condition may remain true while the replacement mounts
+				// the volume. Let that pod start instead of deleting it again.
+				require.NoError(t, r.ensureLitePod(ctx, shard, "main", "z1", pool))
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(pod), current))
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, pod.UID, current.UID)
+			}
+			currentPVC := &corev1.PersistentVolumeClaim{}
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(pvc), currentPVC))
+			require.Equal(t, pvc.UID, currentPVC.UID)
+			require.Equal(
+				t,
+				0,
+				currentPVC.Spec.Resources.Requests.Storage().Cmp(resource.MustParse("20Gi")),
+			)
 		})
 	}
 }
@@ -124,7 +225,7 @@ func TestLiteInternalTLSConfiguresGatewayClient(t *testing.T) {
 }
 
 func TestLiteReloadConvergesWithoutReplacingPod(t *testing.T) {
-	for _, outcome := range []string{"applied", "not synced", "needs restart", "stale address"} {
+	for _, outcome := range []string{"applied", "expansion pending", "not synced", "needs restart", "stale address"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx := t.Context()
 			shard, pool := newTestLiteShard(), newTestPoolSpec()
@@ -173,14 +274,22 @@ func TestLiteReloadConvergesWithoutReplacingPod(t *testing.T) {
 			require.NoError(t, store.RegisterMultipooler(ctx, target, false))
 			rpc := rpcclient.NewFakeClient()
 			response := &md.ReloadConfigResponse{}
-			if outcome == "applied" {
+			if outcome == "applied" || outcome == "expansion pending" {
 				response.ConfigLoadTime = timestamppb.Now()
 			}
 			if outcome == "needs restart" {
 				response.NeedsRestart = true
 			}
 			rpc.ReloadConfigResponses[topoclient.ComponentIDString(target.Id)] = response
-			base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shard, pod).Build()
+			pvc, err := BuildPoolDataPVC(shard, "main", "z1", pool, 0, false, scheme)
+			require.NoError(t, err)
+			pvc.Status.Capacity = corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse(pool.Storage.Size),
+			}
+			if outcome == "expansion pending" {
+				pvc.Status.Capacity[corev1.ResourceStorage] = resource.MustParse("5Gi")
+			}
+			base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(shard, pod, pvc).Build()
 			r := &ShardReconciler{
 				Client: testutil.NewFakeClientWithFailures(
 					base,
@@ -222,14 +331,18 @@ func TestLiteReloadConvergesWithoutReplacingPod(t *testing.T) {
 				callLogHas(rpc.GetCallLog(), "ReloadConfig"),
 			)
 			condition = r.liteUpToDateCondition(shard, "main", "z1", pool, rendered, current)
-			if outcome == "applied" {
+			if outcome == "applied" || outcome == "expansion pending" {
 				require.Equal(
 					t,
 					rendered.reloadHash,
 					current.Annotations[metadata.AnnotationPostgresReloadHash],
 				)
 				require.Equal(t, metav1.ConditionTrue, condition.Status)
-				require.Zero(t, result.RequeueAfter)
+				if outcome == "expansion pending" {
+					require.Equal(t, liteStorageRequeue, result.RequeueAfter)
+				} else {
+					require.Zero(t, result.RequeueAfter)
+				}
 			} else {
 				require.Equal(
 					t,

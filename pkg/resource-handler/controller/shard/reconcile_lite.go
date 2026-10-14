@@ -27,6 +27,10 @@ const (
 	// pooler does not report PRIMARY. The role is read over RPC, and a change
 	// to it produces no Kubernetes event.
 	litePrimaryRequeue = 10 * time.Second
+
+	// Retained PVCs have no owner reference, so their CSI status changes do
+	// not enqueue the shard. Poll until the requested expansion completes.
+	liteStorageRequeue = 10 * time.Second
 )
 
 // reconcileLite reconciles a Lite shard after the prelude every shard runs. A
@@ -97,7 +101,8 @@ func (r *ShardReconciler) reconcileLite(
 		return ctrl.Result{RequeueAfter: topoUnavailableRequeueDelay}, nil
 	}
 
-	if err := r.ensureLiteDataPVC(ctx, shard, poolName, cellName, poolSpec); err != nil {
+	pvcWait, err := r.ensureLiteDataPVC(ctx, shard, poolName, cellName, poolSpec)
+	if err != nil {
 		monitoring.RecordSpanError(span, err)
 		r.Recorder.Eventf(shard, "Warning", "FailedApply", "Failed to reconcile data PVC: %v", err)
 		return ctrl.Result{}, err
@@ -120,7 +125,7 @@ func (r *ShardReconciler) reconcileLite(
 	if !meta.IsStatusConditionTrue(shard.Status.Conditions, multigresv1alpha1.ConditionPrimary) {
 		return ctrl.Result{RequeueAfter: litePrimaryRequeue}, nil
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: pvcWait}, nil
 }
 
 // litePool returns the pool and cell of a Lite shard. Admission allows exactly
@@ -184,20 +189,34 @@ func (r *ShardReconciler) registerLiteDatabase(
 
 // ensureLiteDataPVC creates or expands the Lite pod's data PVC. It never
 // deletes it: removal follows the PVC deletion policy when the Shard is deleted.
+// It requests a retry until the CSI driver reports the requested capacity and
+// clears any pending filesystem resize, including for retained PVCs.
 func (r *ShardReconciler) ensureLiteDataPVC(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
 	poolName, cellName string,
 	poolSpec multigresv1alpha1.PoolSpec,
-) error {
+) (time.Duration, error) {
 	name := BuildPoolDataPVCName(shard, poolName, cellName, 0)
 	existing := &corev1.PersistentVolumeClaim{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: shard.Namespace, Name: name}, existing)
 	if err == nil {
-		return r.expandPVCIfNeeded(ctx, shard, existing, poolSpec)
+		if err := r.expandPVCIfNeeded(ctx, shard, existing, poolSpec); err != nil {
+			return 0, err
+		}
+		capacity := existing.Status.Capacity.Storage()
+		requested := existing.Spec.Resources.Requests.Storage()
+		pendingResize := pvcNeedsFilesystemResize(
+			map[string]*corev1.PersistentVolumeClaim{name: existing},
+			name,
+		)
+		if capacity.Cmp(*requested) < 0 || pendingResize {
+			return liteStorageRequeue, nil
+		}
+		return 0, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get PVC %s: %w", name, err)
+		return 0, fmt.Errorf("failed to get PVC %s: %w", name, err)
 	}
 
 	pvc, err := BuildPoolDataPVC(
@@ -210,7 +229,7 @@ func (r *ShardReconciler) ensureLiteDataPVC(
 		r.Scheme,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to build PVC %s: %w", name, err)
+		return 0, fmt.Errorf("failed to build PVC %s: %w", name, err)
 	}
 	// Only one pod may use the data volume. ReadWriteOncePod has the kubelet
 	// enforce that across nodes, so a replacement pod cannot start while the
@@ -219,16 +238,17 @@ func (r *ShardReconciler) ensureLiteDataPVC(
 		pvc.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}
 	}
 	if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create PVC %s: %w", name, err)
+		return 0, fmt.Errorf("failed to create PVC %s: %w", name, err)
 	}
 	log.FromContext(ctx).Info("Created Lite data PVC", "pvc", name)
-	return nil
+	return liteStorageRequeue, nil
 }
 
 // ensureLitePod creates the Lite pod when it is missing and deletes it when it
-// is terminal or its spec-hash no longer matches, so the next reconcile creates
-// it again. There is no disruption preflight and no drain: the pod is
-// the shard's only pooler, so there is no cohort to protect.
+// is terminal, its spec-hash no longer matches, or its data PVC requires a
+// filesystem resize. The next reconcile creates it again. There is no
+// disruption preflight and no drain: the pod is the shard's only pooler, so
+// there is no cohort to protect.
 func (r *ShardReconciler) ensureLitePod(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
@@ -266,7 +286,30 @@ func (r *ShardReconciler) ensureLitePod(
 		reason = "replace a terminal pod"
 	} else if existing.Annotations[metadata.AnnotationSpecHash] ==
 		desired.Annotations[metadata.AnnotationSpecHash] {
-		return nil
+		// Wait for a replacement to finish mounting its volume before another
+		// resize restart, as the regular pool path waits for healthy pods.
+		if !isPodReady(existing) {
+			return nil
+		}
+		pvcName := BuildPoolDataPVCName(shard, poolName, cellName, 0)
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(
+			ctx,
+			client.ObjectKey{Namespace: shard.Namespace, Name: pvcName},
+			pvc,
+		); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("failed to get PVC %s for filesystem resize: %w", pvcName, err)
+		}
+		if !pvcNeedsFilesystemResize(
+			map[string]*corev1.PersistentVolumeClaim{pvcName: pvc},
+			pvcName,
+		) {
+			return nil
+		}
+		reason = "complete data PVC filesystem expansion"
 	}
 
 	logger.Info(
