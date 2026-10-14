@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -17,9 +18,16 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
 
-// liteTopoTimeout bounds the topology write reconcileLite makes, matching the
-// deadline the data-plane phase puts on its topology connection.
-const liteTopoTimeout = 30 * time.Second
+const (
+	// liteTopoTimeout bounds the topology write reconcileLite makes, matching
+	// the deadline the data-plane phase puts on its topology connection.
+	liteTopoTimeout = 30 * time.Second
+
+	// litePrimaryRequeue is how often a Lite shard is reconciled while its
+	// pooler does not report PRIMARY. The role is read over RPC, and a change
+	// to it produces no Kubernetes event.
+	litePrimaryRequeue = 10 * time.Second
+)
 
 // reconcileLite reconciles a Lite shard after the prelude every shard runs. A
 // Lite shard is one pod running minigres and pgctld, plus its data PVC.
@@ -101,6 +109,9 @@ func (r *ShardReconciler) reconcileLite(
 		return ctrl.Result{}, err
 	}
 
+	if !meta.IsStatusConditionTrue(shard.Status.Conditions, multigresv1alpha1.ConditionPrimary) {
+		return ctrl.Result{RequeueAfter: litePrimaryRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

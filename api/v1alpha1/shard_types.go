@@ -287,6 +287,16 @@ type PostgresConfigStatus struct {
 	Error string `json:"error,omitempty"`
 }
 
+const (
+	// ConditionPrimary is true when a Lite shard's pooler reports the PRIMARY
+	// routing role over its Status RPC. Pod readiness does not set it.
+	ConditionPrimary = "Primary"
+
+	// ConditionUpToDate is true when a Lite shard's pod carries the spec-hash
+	// of the pod the operator would build for it now.
+	ConditionUpToDate = "UpToDate"
+)
+
 // ShardStatus defines the observed state of Shard.
 type ShardStatus struct {
 	// ObservedGeneration is the most recent generation observed.

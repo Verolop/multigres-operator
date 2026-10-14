@@ -4,17 +4,22 @@
 package shard_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
+	cm "github.com/multigres/multigres/go/pb/clustermetadata"
+	md "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/data-handler/poolerclient"
 	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
 	"github.com/multigres/multigres-operator/pkg/testutil"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
@@ -214,4 +220,107 @@ func TestReconcileLite(t *testing.T) {
 			&multigresv1alpha1.Shard{})) &&
 			apierrors.IsNotFound(k8sClient.Get(ctx, podKey, &corev1.Pod{}))
 	}, 30*time.Second, 200*time.Millisecond, "Lite shard and pod were not deleted")
+}
+
+// markLitePodRunning keeps the Lite pod running with an IP and Ready, standing
+// in for the kubelet envtest does not run.
+func markLitePodRunning(ctx context.Context, c client.Client, key types.NamespacedName) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pod := &corev1.Pod{}
+			if err := c.Get(ctx, key, pod); err != nil || podReadyForRolloutTest(pod) {
+				continue
+			}
+			pod.Status.Phase = corev1.PodRunning
+			pod.Status.PodIP = "10.0.0.7"
+			pod.Status.Conditions = []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			}
+			_ = c.Status().Update(ctx, pod)
+		}
+	}
+}
+
+func TestLiteStatusReachesAvailableAndPrimary(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	_ = multigresv1alpha1.AddToScheme(scheme)
+	_ = appsv1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	mgr := testutil.SetUpEnvtestManager(t, scheme,
+		testutil.WithCRDPaths(filepath.Join("../../../../", "config", "crd", "bases")),
+	)
+	ctx := t.Context()
+	k8sClient := testutil.SetUpClient(t, mgr.GetConfig(), scheme)
+
+	shard := newLiteTestShard("lite-status-shard", "lite-status-cluster")
+	podName := shardcontroller.BuildPoolPodName(shard, "default", "zone1", 0)
+	podKey := types.NamespacedName{Namespace: "default", Name: podName}
+
+	_, topoFactory := liteTopo(t)
+
+	rpc := rpcclient.NewFakeClient()
+	rpc.SetStatusResponse(topoclient.ComponentIDString(&cm.ID{
+		Component: cm.ID_MULTIPOOLER,
+		Cell:      "zone1",
+		Name:      shardcontroller.BuildPoolServiceID(podName),
+	}), &md.StatusResponse{Status: &md.Status{PoolerType: cm.PoolerType_PRIMARY}})
+
+	if err := (&shardcontroller.ShardReconciler{
+		Client:          mgr.GetClient(),
+		APIReader:       mgr.GetAPIReader(),
+		Scheme:          mgr.GetScheme(),
+		Recorder:        mgr.GetEventRecorderFor("shard-controller"),
+		PoolerClients:   poolerclient.Static(rpc),
+		CreateTopoStore: topoFactory,
+	}).SetupWithManager(mgr, controller.Options{SkipNameValidation: ptr.To(true)}); err != nil {
+		t.Fatalf("Failed to create controller: %v", err)
+	}
+
+	setTestPostgresPasswordSecretRef(shard)
+	createTestPostgresPasswordSecret(t, ctx, k8sClient, shard.Namespace)
+	require.NoError(t, k8sClient.Create(ctx, shard))
+
+	conditionStatus := func(s *multigresv1alpha1.Shard, condType string) metav1.ConditionStatus {
+		if cond := meta.FindStatusCondition(s.Status.Conditions, condType); cond != nil {
+			return cond.Status
+		}
+		return ""
+	}
+
+	// Before the pod runs, the shard reports it as neither available nor primary.
+	require.Eventually(t, func() bool {
+		got := &multigresv1alpha1.Shard{}
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(shard), got); err != nil {
+			return false
+		}
+		return k8sClient.Get(ctx, podKey, &corev1.Pod{}) == nil &&
+			conditionStatus(got, "Available") == metav1.ConditionFalse &&
+			conditionStatus(got, multigresv1alpha1.ConditionPrimary) == metav1.ConditionFalse
+	}, 30*time.Second, 200*time.Millisecond, "Lite shard did not report its pending pod")
+
+	go markLitePodRunning(ctx, k8sClient, podKey)
+
+	got := &multigresv1alpha1.Shard{}
+	require.Eventually(t, func() bool {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(shard), got); err != nil {
+			return false
+		}
+		return got.Status.ObservedGeneration == got.Generation &&
+			conditionStatus(got, "Available") == metav1.ConditionTrue &&
+			conditionStatus(got, multigresv1alpha1.ConditionPrimary) == metav1.ConditionTrue &&
+			conditionStatus(got, multigresv1alpha1.ConditionUpToDate) == metav1.ConditionTrue
+	}, 30*time.Second, 200*time.Millisecond, "Lite shard did not become Available and Primary")
+
+	require.Equal(t, multigresv1alpha1.PhaseHealthy, got.Status.Phase)
+	require.True(t, got.Status.PoolsReady)
+	require.Equal(t, int32(1), got.Status.ReadyReplicas)
 }
