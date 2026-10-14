@@ -201,6 +201,12 @@ type ShardSpec struct {
 	// +optional
 	DurabilityPolicy string `json:"durabilityPolicy,omitempty"`
 
+	// Mode is the cluster shape, inherited from MultigresCluster.Spec.Mode
+	// through the TableGroup.
+	// +optional
+	// +kubebuilder:validation:Enum=lite
+	Mode string `json:"mode,omitempty"`
+
 	// PostgresSuperuser is the resolved Postgres superuser name propagated from
 	// MultigresCluster. Used to populate POSTGRES_USER on pgctld and multipooler.
 	// +optional
