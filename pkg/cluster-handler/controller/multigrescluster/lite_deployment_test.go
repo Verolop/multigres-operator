@@ -86,7 +86,15 @@ func TestLiteParentPreservesResolvedShardTopology(t *testing.T) {
 			},
 		},
 	}
-	if err := topo.RegisterDatabase(ctx, store, recorder, sh); err != nil {
+	// Seed the record the way the lite Shard registers it.
+	if err := topo.RegisterDatabaseFromSpec(
+		ctx, store, recorder, sh,
+		multigresv1alpha1.DatabaseConfig{
+			Name:             sh.Spec.DatabaseName,
+			DurabilityPolicy: sh.Spec.DurabilityPolicy,
+		},
+		topo.CollectCells(sh), sh.Spec.Backup, sh.Spec.DurabilityPolicy,
+	); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetDatabase(ctx, "postgres")

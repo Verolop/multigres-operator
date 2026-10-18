@@ -154,10 +154,12 @@ func litePool(
 }
 
 // registerLiteDatabase writes the shard's database record to the global
-// topology with RegisterDatabase: its cells, the backup location from
-// spec.backup and the durability policy. It reports false when the topology
-// server cannot be reached yet, so the caller requeues as the data-plane phase
-// does.
+// topology with RegisterDatabaseFromSpec, built from the shard: its cells, the
+// backup location from spec.backup and the durability policy. In lite mode the
+// Shard owns this record because its resolved backup and pool cells may differ
+// from the cluster defaults, and the cluster controller skips it. It reports
+// false when the topology server cannot be reached yet, so the caller requeues
+// as the data-plane phase does.
 func (r *ShardReconciler) registerLiteDatabase(
 	ctx context.Context,
 	shard *multigresv1alpha1.Shard,
@@ -177,7 +179,14 @@ func (r *ShardReconciler) registerLiteDatabase(
 	}
 	defer func() { _ = store.Close() }()
 
-	if err := topo.RegisterDatabase(ctx, store, r.Recorder, shard); err != nil {
+	dbConfig := multigresv1alpha1.DatabaseConfig{
+		Name:             shard.Spec.DatabaseName,
+		DurabilityPolicy: shard.Spec.DurabilityPolicy,
+	}
+	if err := topo.RegisterDatabaseFromSpec(
+		ctx, store, r.Recorder, shard, dbConfig, topo.CollectCells(shard),
+		shard.Spec.Backup, shard.Spec.DurabilityPolicy,
+	); err != nil {
 		if topo.IsTopoUnavailable(err) {
 			logger.Info("Topology server unavailable; requeueing", "error", err.Error())
 			return false, nil
