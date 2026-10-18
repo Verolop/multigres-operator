@@ -21,6 +21,14 @@ func SetClusterTopology(cluster, namespace string, cells, shards int) {
 	clusterShardsTotal.WithLabelValues(cluster, namespace).Set(float64(shards))
 }
 
+// ForgetCluster deletes all cluster-level series for a deleted MultigresCluster.
+func ForgetCluster(name, namespace string) {
+	clusterInfo.DeletePartialMatch(map[string]string{"name": name, "namespace": namespace})
+	match := map[string]string{"cluster": name, "namespace": namespace}
+	clusterCellsTotal.DeletePartialMatch(match)
+	clusterShardsTotal.DeletePartialMatch(match)
+}
+
 // SetCellGatewayReplicas sets the desired and ready gateway replica gauges for a Cell.
 func SetCellGatewayReplicas(cell, namespace string, desired, ready int32) {
 	cellGatewayReplicas.WithLabelValues(cell, namespace, "desired").Set(float64(desired))
@@ -91,4 +99,18 @@ func SetShardHasPrimary(cluster, shard, namespace string, hasPrimary bool) {
 		val = 1.0
 	}
 	shardHasPrimary.WithLabelValues(cluster, shard, namespace).Set(val)
+}
+
+// ForgetShard deletes every per-shard series for a Shard that no longer exists,
+// so gauges such as rolling_update_in_progress do not stay stuck at their last
+// value. It matches on shard and namespace only because the NotFound path has
+// no cluster label.
+func ForgetShard(shard, namespace string) {
+	match := map[string]string{"shard": shard, "namespace": namespace}
+	shardPoolReplicas.DeletePartialMatch(match)
+	poolPodsDrifted.DeletePartialMatch(match)
+	lastBackupAgeSeconds.DeletePartialMatch(match)
+	rollingUpdateInProgress.DeletePartialMatch(match)
+	shardPostureInconsistent.DeletePartialMatch(match)
+	shardHasPrimary.DeletePartialMatch(match)
 }

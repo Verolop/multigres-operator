@@ -13,7 +13,10 @@ package suite
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -34,6 +37,7 @@ import (
 	multigresclustercontroller "github.com/multigres/multigres-operator/pkg/cluster-handler/controller/multigrescluster"
 	tablegroupcontroller "github.com/multigres/multigres-operator/pkg/cluster-handler/controller/tablegroup"
 	"github.com/multigres/multigres-operator/pkg/data-handler/poolerclient"
+	etcdtopo "github.com/multigres/multigres-operator/pkg/data-handler/topo"
 	cellcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/cell"
 	shardcontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/shard"
 	toposervercontroller "github.com/multigres/multigres-operator/pkg/resource-handler/controller/toposerver"
@@ -82,6 +86,12 @@ func Boot() (*ctrltest.Suite, func() error, error) {
 		CRDPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		WatchedKinds: watchedKinds(),
 		SimInterval:  250 * time.Millisecond,
+		// The operator owns its etcd through StatefulSets and its gateways,
+		// multiorch and multiadmin through Deployments, and relies on owner
+		// references to clean them up: without these, those pods, claims and
+		// cascades exist in no test.
+		SimWorkloads:         true,
+		SimGarbageCollection: true,
 		Managers: []ctrltest.ManagerOptions{{
 			Name:              "multigres-operator",
 			CacheOptions:      cacheopts.New(OperatorNamespace),
@@ -166,6 +176,33 @@ func register(ctx context.Context, mgr manager.Manager, s *ctrltest.Suite) error
 		Recorder:        mgr.GetEventRecorderFor("multigrescluster-controller"),
 		APIReader:       mgr.GetAPIReader(),
 		CreateTopoStore: topo.ForClusterRef,
+		// One single-member etcd per address, as topoRegistry models it, named
+		// after nothing the operator manages. Left unstubbed, this dials a real
+		// etcd and the managed global TopoServer is never retired after a move.
+		ReadEtcdIdentity: func(
+			ctx context.Context,
+			namespace string,
+			ref multigresv1alpha1.GlobalTopoServerRef,
+		) (etcdtopo.EtcdIdentity, error) {
+			if err := managedEtcdServing(
+				ctx,
+				mgr.GetAPIReader(),
+				namespace,
+				ref.Address,
+			); err != nil {
+				return etcdtopo.EtcdIdentity{}, err
+			}
+			h := fnv.New64a()
+			_, _ = h.Write([]byte(ref.Address))
+			id := h.Sum64() | 1
+			return etcdtopo.EtcdIdentity{
+				ClusterID: id, StatusClusterID: id, StatusMemberID: id + 1,
+				Members: []etcdtopo.EtcdMember{{
+					ID: id + 1, Name: fmt.Sprintf("etcd-%x", id),
+					PeerURLs: []string{fmt.Sprintf("https://etcd-%x.example:2380", id)},
+				}},
+			}, nil
+		},
 	}
 	if err := cluster.SetupWithManagerReconciler(
 		mgr, s.Reconciles.Wrap("multigrescluster", cluster), opts,
@@ -220,4 +257,39 @@ func register(ctx context.Context, mgr manager.Manager, s *ctrltest.Suite) error
 		return fmt.Errorf("setup shard: %w", err)
 	}
 	return nil
+}
+
+// managedEtcdServing models a managed TopoServer's etcd as reachable only while
+// one of its pods is Ready, as a real one is through its client Service: an
+// address naming a TopoServer's Service (<name>.<namespace>.svc) whose pods
+// are all faulted reads as a dial timeout. Any other address is served.
+func managedEtcdServing(ctx context.Context, c client.Reader, namespace, address string) error {
+	u, err := url.Parse(address)
+	if err != nil {
+		return nil
+	}
+	name, ok := strings.CutSuffix(u.Hostname(), "."+namespace+".svc")
+	if !ok {
+		return nil
+	}
+	ts := &multigresv1alpha1.TopoServer{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, ts); err != nil {
+		return nil
+	}
+	pods := &corev1.PodList{}
+	if err := c.List(ctx, pods, client.InNamespace(namespace)); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !strings.HasPrefix(pod.Name, name+"-") {
+			continue
+		}
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("dialing %s: context deadline exceeded", address)
 }

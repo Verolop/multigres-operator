@@ -125,6 +125,7 @@ func (r *ShardReconciler) Reconcile(
 		if errors.IsNotFound(err) {
 			logger.Info("Shard resource not found, ignoring")
 			r.forgetStrikes(req.Namespace, req.Name)
+			monitoring.ForgetShard(req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		monitoring.RecordSpanError(span, err)

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -475,12 +476,68 @@ func TestUpdateStatus_ExpectedChildren(t *testing.T) {
 		}
 	}
 
+	// globalTopoIn is the cluster's global TopoServer in phase, controlled by
+	// the cluster when owned.
+	globalTopoIn := func(
+		cluster *multigresv1alpha1.MultigresCluster,
+		phase multigresv1alpha1.Phase,
+		owned bool,
+	) *multigresv1alpha1.TopoServer {
+		ts := healthyGlobalTopo("test-cluster-global-topo")
+		ts.Status.Phase = phase
+		if owned {
+			ts.OwnerReferences = []metav1.OwnerReference{{
+				APIVersion: multigresv1alpha1.GroupVersion.String(),
+				Kind:       "MultigresCluster",
+				Name:       cluster.Name,
+				UID:        cluster.UID,
+				Controller: ptr.To(true),
+			}}
+		}
+		return ts
+	}
+	withUID := func(c *multigresv1alpha1.MultigresCluster) *multigresv1alpha1.MultigresCluster {
+		c.UID = "cluster-uid"
+		return c
+	}
+	movedToExternal := withUID(clusterWithExpectedChildren(externalTopo))
+	externalNotOwner := withUID(clusterWithExpectedChildren(externalTopo))
+	stillManaged := withUID(clusterWithExpectedChildren(nil))
+
 	tests := map[string]struct {
 		cluster     *multigresv1alpha1.MultigresCluster
 		children    []client.Object
 		wantPhase   multigresv1alpha1.Phase
 		initialized bool
 	}{
+		"a global topo being retired after a move to external does not count": {
+			cluster: movedToExternal,
+			children: []client.Object{
+				healthyCell("cell-1"),
+				healthyTableGroup("postgres", "default"),
+				globalTopoIn(movedToExternal, multigresv1alpha1.PhaseDegraded, true),
+			},
+			wantPhase:   multigresv1alpha1.PhaseHealthy,
+			initialized: true,
+		},
+		"a global topo the cluster does not control still counts": {
+			cluster: externalNotOwner,
+			children: []client.Object{
+				healthyCell("cell-1"),
+				healthyTableGroup("postgres", "default"),
+				globalTopoIn(externalNotOwner, multigresv1alpha1.PhaseDegraded, false),
+			},
+			wantPhase: multigresv1alpha1.PhaseDegraded,
+		},
+		"a degraded managed global topo degrades the cluster": {
+			cluster: stillManaged,
+			children: []client.Object{
+				healthyCell("cell-1"),
+				healthyTableGroup("postgres", "default"),
+				globalTopoIn(stillManaged, multigresv1alpha1.PhaseDegraded, true),
+			},
+			wantPhase: multigresv1alpha1.PhaseDegraded,
+		},
 		"missing expected cell is progressing": {
 			cluster: clusterWithExpectedChildren(externalTopo),
 			children: []client.Object{

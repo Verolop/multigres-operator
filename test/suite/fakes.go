@@ -2,7 +2,6 @@ package suite
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -25,46 +24,71 @@ import (
 // declared up front, so a test using a different cell name needs this widened.
 const defaultSimCell = "zone-a"
 
-// topoRegistry hands out one in-memory topology store per namespace.
+// topoRegistry hands out one in-memory topology store per topology server,
+// identified by address and root path, the same pair a multipooler is started
+// with.
 //
-// Per namespace rather than one shared store, because namespace-per-test is the
-// suite's isolation boundary and a single store would let one test's cluster
-// see another's multipoolers. Both CreateTopoStore seams resolve through here:
-// the shard's carries the object, the cluster's carries only a DNS address, so
-// that one recovers the namespace by parsing it.
+// Per topology rather than one shared store, for two reasons. Namespace-per-test
+// is the suite's isolation boundary, and the managed address carries the
+// namespace, so a single store would let one test's cluster see another's
+// multipoolers. And a cluster can move between topology servers, and a pooler
+// left pointing at the old one must be invisible to everything reading the new
+// one, or the suite cannot see what that move does to a live shard.
 type topoRegistry struct {
 	ctx context.Context
 
 	mu     sync.Mutex
-	stores map[string]topoclient.Store
-	facts  map[string]*memorytopo.Factory
+	stores map[topoKey]topoclient.Store
+	facts  map[topoKey]*memorytopo.Factory
 }
+
+type topoKey struct{ address, root string }
 
 func newTopoRegistry(ctx context.Context) *topoRegistry {
 	return &topoRegistry{
 		ctx:    ctx,
-		stores: map[string]topoclient.Store{},
-		facts:  map[string]*memorytopo.Factory{},
+		stores: map[topoKey]topoclient.Store{},
+		facts:  map[topoKey]*memorytopo.Factory{},
 	}
 }
 
-// Store returns the namespace's store, creating it on first use.
-func (r *topoRegistry) Store(ns string) topoclient.Store {
+// Store returns the topology's store, creating it on first use.
+func (r *topoRegistry) Store(k topoKey) topoclient.Store {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if s, ok := r.stores[ns]; ok {
+	if s, ok := r.stores[k]; ok {
 		return s
 	}
 	store, factory := memorytopo.NewServerAndFactory(r.ctx, defaultSimCell)
-	r.stores[ns] = store
-	r.facts[ns] = factory
+	r.stores[k] = store
+	r.facts[k] = factory
 	return store
 }
 
-func (r *topoRegistry) client(ns string) (topoclient.Store, error) {
-	r.Store(ns)
+// forgetTopology discards a topology's contents, standing in for a managed etcd
+// whose volumes were deleted along with it. The next use starts from empty, and
+// every pod on it registers again.
+func forgetTopology(k topoKey) error {
+	poolers.forget(k)
+	return topo.forget(k)
+}
+
+func (r *topoRegistry) forget(k topoKey) error {
 	r.mu.Lock()
-	factory := r.facts[ns]
+	defer r.mu.Unlock()
+	s, ok := r.stores[k]
+	delete(r.stores, k)
+	delete(r.facts, k)
+	if !ok {
+		return nil
+	}
+	return s.Close()
+}
+
+func (r *topoRegistry) client(k topoKey) (topoclient.Store, error) {
+	r.Store(k)
+	r.mu.Lock()
+	factory := r.facts[k]
 	r.mu.Unlock()
 	return topoclient.NewWithFactory(
 		factory, "", []string{""}, topoclient.NewDefaultTopoConfig(),
@@ -73,34 +97,38 @@ func (r *topoRegistry) client(ns string) (topoclient.Store, error) {
 
 // ForShard is ShardReconciler.CreateTopoStore.
 func (r *topoRegistry) ForShard(shard *Shard) (topoclient.Store, error) {
-	return r.client(shard.Namespace)
+	return r.ForClusterRef(shard.Spec.GlobalTopoServer)
 }
 
-// ForClusterRef is MultigresClusterReconciler.CreateTopoStore. The ref carries
-// no namespace, only the Service address the cluster controller built as
-// "<cluster>-global-topo.<namespace>.svc:2379", so the namespace comes back out
-// of the address. Left unstubbed, this seam dials a real etcd and the cluster
-// never reaches TopologyReady.
+// ForClusterRef is MultigresClusterReconciler.CreateTopoStore. Left unstubbed,
+// this seam dials a real etcd and the cluster never reaches TopologyReady.
 func (r *topoRegistry) ForClusterRef(
 	ref multigresv1alpha1.GlobalTopoServerRef,
 ) (topoclient.Store, error) {
-	ns, err := namespaceFromTopoAddress(ref.Address)
-	if err != nil {
-		return nil, err
-	}
-	return r.client(ns)
+	return r.client(topoKey{address: ref.Address, root: ref.RootPath})
 }
 
-func namespaceFromTopoAddress(address string) (string, error) {
-	parts := strings.Split(address, ".")
-	if len(parts) < 2 || parts[1] == "" {
-		return "", fmt.Errorf("cannot derive namespace from topo address %q", address)
+// podTopo reads the topology a pool pod's multipooler was started against,
+// from the same flags the real binary reads it from.
+func podTopo(pod *corev1.Pod) (topoKey, bool) {
+	var k topoKey
+	var haveAddr, haveRoot bool
+	for _, c := range pod.Spec.Containers {
+		for _, arg := range c.Args {
+			if v, ok := strings.CutPrefix(arg, "--topo-global-server-addresses="); ok {
+				k.address, haveAddr = v, true
+			} else if v, ok := strings.CutPrefix(arg, "--topo-global-root="); ok {
+				k.root, haveRoot = v, true
+			}
+		}
 	}
-	return parts[1], nil
+	return k, haveAddr && haveRoot
 }
 
-// poolerSim is the data plane: it registers a multipooler per pool pod in that
-// namespace's topology store and answers a healthy Status RPC for each.
+// poolerSim is the data plane: it registers a multipooler per pool pod in the
+// topology store that pod's flags name and answers a healthy Status RPC for
+// each. Pods sharing a topology form one cohort; a pod left on a topology the
+// shard has moved off is registered only there.
 //
 // Without it the shard controller stalls at PostureConsistent=Unknown
 // (AwaitingPoolerRegistration) and never reaches a terminal state.
@@ -150,6 +178,25 @@ func (p *poolerSim) HoldRegistrations(ns string) func() {
 	}
 }
 
+func registrationKey(k topoKey, ns, podUID string) string {
+	return registrationPrefix(k) + ns + "/" + podUID
+}
+
+func registrationPrefix(k topoKey) string {
+	return k.address + "|" + k.root + "|"
+}
+
+func (p *poolerSim) forget(k topoKey) {
+	prefix := registrationPrefix(k)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.registered {
+		if strings.HasPrefix(key, prefix) {
+			delete(p.registered, key)
+		}
+	}
+}
+
 func (p *poolerSim) run(ctx context.Context) {
 	p.registered = map[string]bool{}
 	t := time.NewTicker(p.interval)
@@ -171,20 +218,34 @@ func (p *poolerSim) tick(ctx context.Context) {
 	); err != nil {
 		return
 	}
-	byNamespace := map[string][]*corev1.Pod{}
+	type group struct {
+		ns   string
+		topo topoKey
+	}
+	groups := map[group][]*corev1.Pod{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if !pod.DeletionTimestamp.IsZero() {
 			continue
 		}
-		byNamespace[pod.Namespace] = append(byNamespace[pod.Namespace], pod)
+		k, ok := podTopo(pod)
+		if !ok {
+			continue
+		}
+		g := group{ns: pod.Namespace, topo: k}
+		groups[g] = append(groups[g], pod)
 	}
-	for ns, group := range byNamespace {
-		p.tickNamespace(ctx, ns, group)
+	for g, pods := range groups {
+		p.tickTopology(ctx, g.ns, g.topo, pods)
 	}
 }
 
-func (p *poolerSim) tickNamespace(ctx context.Context, ns string, pods []*corev1.Pod) {
+func (p *poolerSim) tickTopology(
+	ctx context.Context,
+	ns string,
+	k topoKey,
+	pods []*corev1.Pod,
+) {
 	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
 
 	ids := make([]*cm.ID, 0, len(pods))
@@ -204,7 +265,7 @@ func (p *poolerSim) tickNamespace(ctx context.Context, ns string, pods []*corev1
 		CohortMembers:    ids,
 		DurabilityPolicy: topoclient.AtLeastN(1),
 	}
-	store := p.topo.Store(ns)
+	store := p.topo.Store(k)
 
 	for i, pod := range pods {
 		id := ids[i]
@@ -235,7 +296,11 @@ func (p *poolerSim) tickNamespace(ctx context.Context, ns string, pods []*corev1
 		}
 		p.rpc.SetStatusResponse(topoclient.ComponentIDString(id), resp)
 
-		key := ns + "/" + pod.Name
+		// Keyed by topology and pod UID, not name: a rolled pod keeps its name
+		// but is a new process, and a real multipooler registers on every
+		// start. Keyed by name, a replacement was never registered, so once the
+		// operator pruned its predecessor's entry it was never observed again.
+		key := registrationKey(k, ns, string(pod.UID))
 		p.mu.Lock()
 		already := p.registered[key]
 		heldBack := p.held[ns]

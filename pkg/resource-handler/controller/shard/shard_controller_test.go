@@ -2,8 +2,10 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -16,9 +18,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
 
+	"github.com/multigres/multigres-operator/pkg/monitoring"
 	"github.com/multigres/multigres-operator/pkg/testutil"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 )
@@ -1183,6 +1187,40 @@ func TestShardReconciler_Reconcile(t *testing.T) {
 	}
 }
 
+// setAllShardGauges sets one series on each per-shard gauge.
+func setAllShardGauges(cluster, shard, namespace string) {
+	monitoring.SetShardPoolReplicas(cluster, shard, "primary", "zone-a", namespace, 3, 3)
+	monitoring.SetPoolPodsDrifted(cluster, shard, "primary", "zone-a", namespace, 1)
+	monitoring.SetLastBackupAge(cluster, shard, namespace, time.Minute)
+	monitoring.SetRollingUpdateInProgress(cluster, shard, "primary", "zone-a", namespace, true)
+	monitoring.SetShardPostureInconsistent(cluster, shard, namespace, true)
+	monitoring.SetShardHasPrimary(cluster, shard, namespace, true)
+}
+
+// shardGaugeFamilies returns the per-shard metric families that still have a
+// series for shard in namespace.
+func shardGaugeFamilies(t *testing.T, shard, namespace string) []string {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	var got []string
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["shard"] == shard && labels["namespace"] == namespace {
+				got = append(got, f.GetName())
+				break
+			}
+		}
+	}
+	return got
+}
+
 func TestShardReconciler_ReconcileNotFound(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = multigresv1alpha1.AddToScheme(scheme)
@@ -1190,32 +1228,61 @@ func TestShardReconciler_ReconcileNotFound(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 	_ = policyv1.AddToScheme(scheme)
 
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		Build()
-
-	reconciler := &ShardReconciler{
-		Client:          fakeClient,
-		Scheme:          scheme,
-		Recorder:        record.NewFakeRecorder(10),
-		CreateTopoStore: newMemoryTopoFactory(),
+	newReconciler := func(c client.Client) *ShardReconciler {
+		return &ShardReconciler{
+			Client:          c,
+			Scheme:          scheme,
+			Recorder:        record.NewFakeRecorder(10),
+			CreateTopoStore: newMemoryTopoFactory(),
+		}
 	}
 
-	// Reconcile non-existent resource
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "nonexistent-shard",
-			Namespace: "default",
-		},
-	}
+	t.Run("forgets all series of the missing shard only", func(t *testing.T) {
+		t.Cleanup(func() {
+			monitoring.ForgetShard("notfound-gone", "default")
+			monitoring.ForgetShard("notfound-kept", "default")
+		})
+		setAllShardGauges("cluster-1", "notfound-gone", "default")
+		setAllShardGauges("cluster-1", "notfound-kept", "default")
 
-	result, err := reconciler.Reconcile(t.Context(), req)
-	if err != nil {
-		t.Errorf("Reconcile() should not error on NotFound, got: %v", err)
-	}
-	if result.RequeueAfter > 0 {
-		t.Errorf("Reconcile() should not requeue on NotFound")
-	}
+		reconciler := newReconciler(fake.NewClientBuilder().WithScheme(scheme).Build())
+		result, err := reconciler.Reconcile(t.Context(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "notfound-gone", Namespace: "default"},
+		})
+		if err != nil {
+			t.Errorf("Reconcile() should not error on NotFound, got: %v", err)
+		}
+		if result.RequeueAfter > 0 {
+			t.Errorf("Reconcile() should not requeue on NotFound")
+		}
+
+		if got := shardGaugeFamilies(t, "notfound-gone", "default"); len(got) != 0 {
+			t.Errorf("expected no series for the missing shard, still present in %v", got)
+		}
+		if got := shardGaugeFamilies(t, "notfound-kept", "default"); len(got) != 6 {
+			t.Errorf("expected 6 series kept for the other shard, got %v", got)
+		}
+	})
+
+	t.Run("keeps series when Get fails with a non-NotFound error", func(t *testing.T) {
+		t.Cleanup(func() { monitoring.ForgetShard("geterr-shard", "default") })
+		setAllShardGauges("cluster-1", "geterr-shard", "default")
+
+		injected := errors.New("injected get failure")
+		c := testutil.NewFakeClientWithFailures(
+			fake.NewClientBuilder().WithScheme(scheme).Build(),
+			&testutil.FailureConfig{OnGet: testutil.FailOnKeyName("geterr-shard", injected)},
+		)
+		_, err := newReconciler(c).Reconcile(t.Context(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "geterr-shard", Namespace: "default"},
+		})
+		if !errors.Is(err, injected) {
+			t.Fatalf("expected injected error, got %v", err)
+		}
+		if got := shardGaugeFamilies(t, "geterr-shard", "default"); len(got) != 6 {
+			t.Errorf("series must survive a transient Get error, got %v", got)
+		}
+	})
 }
 
 func TestShardReconciler_UpdateStatus(t *testing.T) {

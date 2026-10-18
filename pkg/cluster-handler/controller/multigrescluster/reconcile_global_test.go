@@ -28,16 +28,17 @@ import (
 	"github.com/multigres/multigres-operator/pkg/util/name"
 )
 
-// TestReconcileGlobalTopoServer_ExternalPruneScope covers the defect where an
-// external global topology pruned every TopoServer sharing the cluster label,
-// including a cell's own local TopoServer. The prune must delete only a
+// TestRetireManagedGlobalTopo_Scope covers the defect where an external
+// global topology pruned every TopoServer sharing the cluster label,
+// including a cell's own local TopoServer. Retirement must delete only a
 // TopoServer that carries the global-topo component label and is
 // controller-owned by this cluster, and each of those two checks is pinned
 // on its own: a fixture that fails only the ownership check and a fixture
 // that fails only the component check must each survive, in addition to the
 // cell's own local TopoServer (which fails both) surviving and the real
-// global TopoServer being deleted.
-func TestReconcileGlobalTopoServer_ExternalPruneScope(t *testing.T) {
+// global TopoServer being deleted. reconcileGlobalTopoServer itself must
+// delete nothing: retirement waits for the move to finish.
+func TestRetireManagedGlobalTopo_Scope(t *testing.T) {
 	scheme := setupScheme()
 
 	cluster := &multigresv1alpha1.MultigresCluster{
@@ -139,6 +140,10 @@ func TestReconcileGlobalTopoServer_ExternalPruneScope(t *testing.T) {
 		},
 	}
 
+	// The move has finished by the time retirement runs below; the stored
+	// cluster carries that generation and status too, since retirement re-reads
+	// it before deleting.
+	markMoveFinished(cluster)
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(cluster, globalTopo, localTopo, wrongOwnerGlobalTopo, wrongComponentOwnedByCluster).
 		Build()
@@ -146,14 +151,6 @@ func TestReconcileGlobalTopoServer_ExternalPruneScope(t *testing.T) {
 		Client:   c,
 		Scheme:   scheme,
 		Recorder: record.NewFakeRecorder(10),
-	}
-
-	if err := r.reconcileGlobalTopoServer(
-		t.Context(),
-		cluster,
-		resolver.NewResolver(c, "default"),
-	); err != nil {
-		t.Fatalf("reconcileGlobalTopoServer() error = %v", err)
 	}
 
 	exists := func(name string) bool {
@@ -173,6 +170,18 @@ func TestReconcileGlobalTopoServer_ExternalPruneScope(t *testing.T) {
 		}
 	}
 
+	res := resolver.NewResolver(c, "default")
+	if err := r.reconcileGlobalTopoServer(t.Context(), cluster, res); err != nil {
+		t.Fatalf("reconcileGlobalTopoServer() error = %v", err)
+	}
+	if !exists(globalTopo.Name) {
+		t.Fatalf("reconcileGlobalTopoServer deleted %s before the move finished", globalTopo.Name)
+	}
+
+	r.ReadEtcdIdentity = distinctEtcds
+	if _, err := r.retireManagedGlobalTopo(t.Context(), cluster, res); err != nil {
+		t.Fatalf("retireManagedGlobalTopo() error = %v", err)
+	}
 	if exists(globalTopo.Name) {
 		t.Errorf("expected global TopoServer %s to be deleted", globalTopo.Name)
 	}

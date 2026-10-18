@@ -3,6 +3,7 @@ package shard
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	multigresv1alpha1 "github.com/multigres/multigres-operator/api/v1alpha1"
+	"github.com/multigres/multigres-operator/pkg/data-handler/topo"
 	"github.com/multigres/multigres-operator/pkg/monitoring"
 	"github.com/multigres/multigres-operator/pkg/util/metadata"
 	pvcutil "github.com/multigres/multigres-operator/pkg/util/pvc"
@@ -756,6 +758,32 @@ func (r *ShardReconciler) handleRollingUpdates(
 		return nil
 	}
 
+	// A pod still configured for a global topology the shard has moved off
+	// cannot register where multiorch and the readiness gate now look, so it
+	// never turns Ready again. The health, capacity and posture gates below
+	// all wait on Ready poolers, so they would hold its replacement forever.
+	// Draining it costs nothing: it is already invisible to the rest of the
+	// cluster. This stays one pod per pass but does not wait for the previous
+	// replacement to turn Ready, because the first replacement alone cannot
+	// form a quorum and so cannot turn Ready either.
+	if pod := r.topoStrandedPod(ctx, shard, existingPods); pod != nil {
+		if err := r.initiateDrain(ctx, pod); err != nil {
+			return fmt.Errorf("failed to initiate drain for topology-stranded pod %s: %w",
+				pod.Name, err)
+		}
+		rollout.SetStarted()
+		logger.Info("Initiated drain for pod stranded on a previous global topology",
+			"pod", pod.Name)
+		r.Recorder.Eventf(
+			shard,
+			"Normal",
+			"PodUpdated",
+			"Initiated drain for pod %s, stranded on a previous global topology",
+			pod.Name,
+		)
+		return nil
+	}
+
 	// Prevent a new drain if some other pool/cell in this shard is
 	// already mid-rollout or has not yet come back Ready. This reads uncached
 	// state and includes extra pods left over from scale-down.
@@ -873,6 +901,121 @@ func (r *ShardReconciler) handleRollingUpdates(
 	}
 
 	return nil
+}
+
+// topoStrandedPod returns the lowest-named pool pod stranded on a previous
+// global topology, or nil.
+//
+// podTopoDrifted only nominates candidates. The readiness gate it reads also
+// goes False when observation fails for reasons unrelated to topology, such
+// as the operator being unable to load its RPC credentials, and a pod whose
+// old address still reaches the shard's topology is registered there and
+// must keep the gated path. So a candidate is stranded only once the shard's
+// current topology has been read and holds no live pooler for it. Failing to
+// read it counts as the pooler being present, leaving the gated path in
+// charge.
+func (r *ShardReconciler) topoStrandedPod(
+	ctx context.Context,
+	shard *multigresv1alpha1.Shard,
+	pods map[string]*corev1.Pod,
+) *corev1.Pod {
+	var candidates []*corev1.Pod
+	for _, name := range slices.Sorted(maps.Keys(pods)) {
+		if podTopoDrifted(pods[name], shard) {
+			candidates = append(candidates, pods[name])
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	logger := log.FromContext(ctx)
+	// isAnyPodDraining and the rollout tracker only serialize within one
+	// pool/cell and one pass, and the gates this path skips are what
+	// serialize the rest of the shard. Without this, each pool/cell would
+	// start its own drain on the next pass, and if the old topology is still
+	// up, several poolers it is still serving could go at once. Read
+	// uncached, like canStartDisruption, so a drain annotation written by the
+	// previous pass is not missed.
+	shardPods, err := r.listDisruptionPods(ctx, shard)
+	if err != nil {
+		logger.Info("Not replacing topology-drifted pods: cannot list the shard's pods",
+			"error", err)
+		return nil
+	}
+	for i := range shardPods.Items {
+		pod := &shardPods.Items[i]
+		if pod.Annotations[metadata.AnnotationDrainState] != "" || !pod.DeletionTimestamp.IsZero() {
+			return nil
+		}
+	}
+
+	store, err := r.topoStore(ctx, shard)
+	if err != nil || store == nil {
+		logger.Info("Not replacing topology-drifted pods: cannot open the shard's topology",
+			"error", err)
+		return nil
+	}
+	defer func() { _ = store.Close() }()
+
+	names := make([]string, len(candidates))
+	for i, pod := range candidates {
+		names[i] = pod.Name
+	}
+	live, err := topo.LivePoolerPods(ctx, store, shard, names)
+	if err != nil {
+		logger.Info("Not replacing topology-drifted pods: cannot read the shard's topology",
+			"error", err)
+		return nil
+	}
+	for _, pod := range candidates {
+		if !live[pod.Name] {
+			return pod
+		}
+	}
+	return nil
+}
+
+// podTopoDrifted reports whether pod's multipooler points at a different
+// global topology (address or root) than the shard's spec while its pooler
+// readiness gate is not True. That makes it a candidate for topoStrandedPod,
+// which decides.
+func podTopoDrifted(pod *corev1.Pod, shard *multigresv1alpha1.Shard) bool {
+	if pod == nil || !pod.DeletionTimestamp.IsZero() ||
+		pod.Annotations[metadata.AnnotationDrainState] != "" || poolerDataReady(pod) {
+		return false
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name != multipoolerContainerName {
+			continue
+		}
+		var addr, root string
+		var haveAddr, haveRoot bool
+		for _, arg := range c.Args {
+			if v, ok := strings.CutPrefix(arg, topoGlobalAddressFlag); ok {
+				addr, haveAddr = v, true
+			} else if v, ok := strings.CutPrefix(arg, topoGlobalRootFlag); ok {
+				root, haveRoot = v, true
+			}
+		}
+		// A pod missing either flag was not built by this operator's
+		// multipooler template, so there is no topology to compare.
+		if !haveAddr || !haveRoot {
+			return false
+		}
+		return addr != shard.Spec.GlobalTopoServer.Address ||
+			root != shard.Spec.GlobalTopoServer.RootPath
+	}
+	return false
+}
+
+func poolerDataReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == PoolerDataReadyCondition {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // selectPodToDrain chooses the best pod to drain during scale-down.
