@@ -21,9 +21,6 @@ const (
 	// certificates when the cluster does not name one.
 	CertIssuerName = certs.DefaultIssuerName
 
-	// CertDuration is the certificate duration (5 years), matching non-HA projects.
-	CertDuration = certs.Duration
-
 	// CertLiteralSubjectTemplate is the literal subject template for certificates.
 	// The CN placeholder is replaced with the certCommonName.
 	CertLiteralSubjectTemplate = certs.LiteralSubjectTemplate
