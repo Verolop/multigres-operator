@@ -28,10 +28,6 @@ const (
 
 var certGVK = certs.GVK
 
-// maxCommonNameBytes is the X.509 upper bound for the CN attribute
-// (RFC 5280 ub-common-name). cert-manager's webhook rejects longer CNs.
-const maxCommonNameBytes = certs.MaxCommonNameBytes
-
 type certSpec struct {
 	name       string
 	secretName string
@@ -292,13 +288,6 @@ func issuerName(cluster *multigresv1alpha1.MultigresCluster) string {
 		return cluster.Spec.IssuerName
 	}
 	return CertIssuerName
-}
-
-// truncateCommonName returns cn unchanged when it fits the X.509 CN limit.
-// Longer values are truncated and given a deterministic hash suffix so the
-// result stays unique per identity and stable across reconciles.
-func truncateCommonName(cn string) string {
-	return certs.TruncateCommonName(cn)
 }
 
 func buildCertificateFromSpec(
