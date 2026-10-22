@@ -84,6 +84,42 @@ Controller unit and envtest regressions exercise flags, outage handling and PVC
 retention, but do not run Minigres or establish runtime SQL compatibility. Keep
 that runtime qualification evidence separate from controller test results.
 
+The dedicated `minigres` e2e package automates these scenarios in its own Kind
+cluster with cert-manager, a persistent external etcd deployment, and a Lite
+cluster. It checks authenticated Status/ReloadConfig calls and rejection of
+plaintext, missing client certificates and incorrect server identities. After
+stopping etcd, it requires 45 consecutive SQL write/read iterations without
+retries, restarts the Minigres container, replaces the pod, and compares row
+checksums and PVC/PV identities. It also checks the cold-bootstrap gate and waits
+for both gateway and pooler records to advertise the replacement IP after etcd
+returns. SQL uses the gateway Service with `sslmode=disable`; public SQL TLS is
+not supported in Lite. RWO storage is explicit because Kind's local-path
+provisioner does not implement the default ReadWriteOncePod access mode.
+
+Every code PR runs this package with fixture images pinned to the qualified
+upstream revision `8f5c8896bb89f92c533633a0973aa92e3672060a`. The nightly canary
+runs both the shared suite and this dedicated package with its verified candidate
+digests through `E2E_*` overrides. Both must pass before promotion or a green
+compatibility report. The fixture pins do not change compiled runtime defaults.
+Manual canaries against older operator refs must include this test package.
+
+Run the same qualification locally with Docker, Kind and kubectl available:
+
+```sh
+make container pull-e2e-images kustomize
+OPERATOR_IMG="$(make -s print-img)" REPO_ROOT="$PWD" \
+  E2E_FAILURE_LOG_DIR=/tmp/minigres-e2e-logs \
+  go test -tags=e2e ./test/e2e/dedicated/minigres -v -count=1 -timeout=30m
+```
+
+Set `E2E_MULTIPOOLER_IMAGE` and `E2E_POSTGRES_IMAGE` to immutable candidate
+references to override the fixture pair. The framework prepares digest images
+inside Kind before workload startup. The test restores etcd on failure, collects
+namespace diagnostics, and destroys its dedicated cluster by default. Set
+`E2E_KEEP_CLUSTERS=on-failure` to retain it for investigation. CI uploads failure
+logs through the existing reusable e2e workflow; test output records the tested
+image references, recovery identities and final checksum.
+
 ## PR lifecycle and retries
 
 Promotion maintains one open PR from `chore/promote-runtime-images` to `main`.
