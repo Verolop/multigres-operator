@@ -60,6 +60,13 @@ func (r *ShardReconciler) reconcileLite(
 		return ctrl.Result{}, err
 	}
 
+	// A template update can bypass cluster admission. Never provision another
+	// static primary alongside a pod or retained data volume with another identity.
+	if err := r.validateLiteResourceIdentity(ctx, shard, poolName, cellName); err != nil {
+		r.Recorder.Eventf(shard, "Warning", "ConfigError", "%v", err)
+		return ctrl.Result{}, err
+	}
+
 	// The pod mounts the shared backup PVC when backups go to a filesystem,
 	// and the rendered postgresql.conf, so both exist before the pod does.
 	if err := r.reconcileSharedBackupPVC(ctx, shard); err != nil {
@@ -430,4 +437,47 @@ func (r *ShardReconciler) reconcileLiteReload(
 	}
 	defer func() { _ = store.Close() }()
 	return r.reconcileReloadState(ctx, store, shard, rendered, rpc)
+}
+
+// validateLiteResourceIdentity also protects retained PVCs without owner refs
+// and blocks identity changes while the old pod is absent or terminating.
+func (r *ShardReconciler) validateLiteResourceIdentity(
+	ctx context.Context,
+	shard *multigresv1alpha1.Shard,
+	pool, cell string,
+) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	selector := client.MatchingLabels{
+		metadata.LabelMultigresCluster: shard.Labels[metadata.LabelMultigresCluster],
+		metadata.LabelAppComponent:     PoolComponentName,
+	}
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods, client.InNamespace(shard.Namespace), selector); err != nil {
+		return err
+	}
+	for _, pod := range pods.Items {
+		if pod.Name != BuildPoolPodName(shard, pool, cell, 0) {
+			return fmt.Errorf(
+				"lite pool identity is immutable: existing pod %s would be replaced by a different identity",
+				pod.Name,
+			)
+		}
+	}
+	pvcs := &corev1.PersistentVolumeClaimList{}
+	if err := reader.List(ctx, pvcs, client.InNamespace(shard.Namespace), selector); err != nil {
+		return err
+	}
+	for _, pvc := range pvcs.Items {
+		if pvc.Labels[metadata.LabelMultigresPool] != "" &&
+			pvc.Name != BuildPoolDataPVCName(shard, pool, cell, 0) {
+			return fmt.Errorf(
+				"lite pool identity is immutable: existing data PVC %s would be replaced by a different identity",
+				pvc.Name,
+			)
+		}
+	}
+	return nil
 }

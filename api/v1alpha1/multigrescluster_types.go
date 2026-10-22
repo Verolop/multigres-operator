@@ -59,10 +59,11 @@ import (
 // changed on a running cluster without a coordinated migration. Both are fixed at
 // creation.
 //
-// mode can be set to lite only when the cluster is created. Clearing it
-// afterwards is allowed.
+// mode is fixed at creation; migration between Lite and distributed clusters
+// requires a data-preserving migration that is not implemented yet.
 // +kubebuilder:validation:XValidation:rule="has(self.topoTLS) == has(oldSelf.topoTLS) && (!has(self.topoTLS) || self.topoTLS == oldSelf.topoTLS)",message="topoTLS is immutable and can only be set when the cluster is created"
-// +kubebuilder:validation:XValidation:rule="!has(self.mode) || self.mode != 'lite' || (has(oldSelf.mode) && oldSelf.mode == 'lite')",message="mode can only be set to lite when the cluster is created"
+// +kubebuilder:validation:XValidation:rule="has(self.mode) == has(oldSelf.mode) && (!has(self.mode) || self.mode == oldSelf.mode)",message="mode is immutable and can only be set when the cluster is created"
+// +kubebuilder:validation:XValidation:rule="!has(self.mode) || self.mode != 'lite' || size(self.cells) == 1",message="lite mode requires exactly one cluster cell"
 type MultigresClusterSpec struct {
 	// Mode selects how the cluster runs. Empty runs multigateway Deployments,
 	// multiorch and a cohort of pool pods per shard. "lite" runs one pod that

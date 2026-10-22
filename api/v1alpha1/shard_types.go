@@ -122,6 +122,9 @@ type PoolSpec struct {
 // Represents a single logical shard with its orchestration and pools.
 
 // ShardSpec defines the desired state of Shard.
+// Lite identity is fixed even when a template is edited without webhooks.
+// +kubebuilder:validation:XValidation:rule="has(self.mode) == has(oldSelf.mode) && (!has(self.mode) || self.mode == oldSelf.mode)",message="shard mode is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.mode) || oldSelf.mode != 'lite' || (self.databaseName == oldSelf.databaseName && self.tableGroupName == oldSelf.tableGroupName && self.shardName == oldSelf.shardName && size(self.pools) == size(oldSelf.pools) && oldSelf.pools.all(p, p in self.pools && has(self.pools[p].cells) && has(oldSelf.pools[p].cells) && self.pools[p].cells == oldSelf.pools[p].cells))",message="lite pool identity is immutable"
 type ShardSpec struct {
 	// DatabaseName is the name of the logical database this shard belongs to.
 	DatabaseName DatabaseName `json:"databaseName"`

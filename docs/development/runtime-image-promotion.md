@@ -69,6 +69,14 @@ record, and a fresh database still needs etcd for its first bootstrap. An explic
 missing-database response is not an outage fallback. Backups and admin operations
 that require topology can still fail during an outage.
 
+Lite requires exactly one cluster cell. Mode is immutable in both directions:
+converting between Lite and distributed mode requires a data-preserving migration
+that is not implemented. The resolved database/table-group/shard/pool/cell
+identity is also fixed. Switching templates is allowed only when that identity
+stays the same; resource, image and supported configuration changes remain valid.
+Admission checks template consumers, and CRD/controller guards prevent a changed
+identity from provisioning a second static primary alongside existing data.
+
 Before qualifying a newer runtime for Lite, exercise these scenarios against the
 exact candidate image digests:
 

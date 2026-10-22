@@ -1975,7 +1975,7 @@ func TestResolver_ValidateClusterLogic_LiteMode(t *testing.T) {
 			cluster: liteCluster(func(s *multigresv1alpha1.MultigresClusterSpec) {
 				s.Cells = append(s.Cells, multigresv1alpha1.CellConfig{Name: "zone-b"})
 			}),
-			wantErr: "lite mode requires exactly one cell in pool 'default', found 2",
+			wantErr: "lite mode requires exactly one cluster cell, found 2",
 		},
 		"Gateway replicas": {
 			cluster: liteCluster(func(s *multigresv1alpha1.MultigresClusterSpec) {

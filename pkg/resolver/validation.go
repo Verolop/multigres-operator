@@ -725,6 +725,12 @@ func (r *Resolver) validateLiteMode(
 	cluster *multigresv1alpha1.MultigresCluster,
 	cellNames []multigresv1alpha1.CellName,
 ) error {
+	if len(cluster.Spec.Cells) != 1 {
+		return fmt.Errorf(
+			"lite mode requires exactly one cluster cell, found %d",
+			len(cluster.Spec.Cells),
+		)
+	}
 	if cluster.Spec.CertCommonName != "" {
 		return fmt.Errorf(
 			"lite mode does not support certCommonName: public PostgreSQL TLS is not configured on the Lite pod",
