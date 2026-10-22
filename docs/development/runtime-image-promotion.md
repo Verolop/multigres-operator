@@ -74,8 +74,11 @@ converting between Lite and distributed mode requires a data-preserving migratio
 that is not implemented. The resolved database/table-group/shard/pool/cell
 identity is also fixed. Switching templates is allowed only when that identity
 stays the same; resource, image and supported configuration changes remain valid.
-Admission checks template consumers, and CRD/controller guards prevent a changed
-identity from provisioning a second static primary alongside existing data.
+Admission checks template consumers, including inline shards that still inherit
+from the global or fallback shard template. Creating, updating or deleting such a
+template must preserve the single resolved pool and its identity. CRD/controller
+guards prevent a changed identity from provisioning a second static primary
+alongside existing data.
 
 Before qualifying a newer runtime for Lite, exercise these scenarios against the
 exact candidate image digests:

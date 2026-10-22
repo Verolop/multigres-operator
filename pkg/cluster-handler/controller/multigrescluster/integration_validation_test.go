@@ -80,7 +80,8 @@ func TestMultigresCluster_Validation(t *testing.T) {
 			t.Fatal("Expected error creating cluster with multiple databases, got nil")
 		}
 		// Expect MaxItems=1 or system database rule violation
-		if !strings.Contains(err.Error(), "Invalid value") && !strings.Contains(err.Error(), "only the single system database") {
+		if !strings.Contains(err.Error(), "Invalid value") &&
+			!strings.Contains(err.Error(), "only the single system database") {
 			t.Errorf("Expected validation error regarding DB count/rules, got: %v", err)
 		}
 	})
@@ -120,7 +121,10 @@ func TestMultigresCluster_Validation(t *testing.T) {
 		}
 		setTestPostgresPasswordSecretRef(cluster)
 		if err := k8sClient.Create(t.Context(), cluster); err != nil {
-			t.Fatalf("Expected cluster with topology TLS and an issuer to be accepted, got: %v", err)
+			t.Fatalf(
+				"Expected cluster with topology TLS and an issuer to be accepted, got: %v",
+				err,
+			)
 		}
 	})
 
@@ -198,7 +202,10 @@ func TestMultigresCluster_Validation(t *testing.T) {
 		k8sClient, _ := setupIntegration(t)
 		cluster := &multigresv1alpha1.MultigresCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "pass-lite-create", Namespace: testNamespace},
-			Spec:       multigresv1alpha1.MultigresClusterSpec{Mode: multigresv1alpha1.ModeLite},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				Mode:  multigresv1alpha1.ModeLite,
+				Cells: []multigresv1alpha1.CellConfig{{Name: "z1", ZoneID: "us-central1-a"}},
+			},
 		}
 		setTestPostgresPasswordSecretRef(cluster)
 		if err := k8sClient.Create(t.Context(), cluster); err != nil {
@@ -229,6 +236,9 @@ func TestMultigresCluster_Validation(t *testing.T) {
 		k8sClient, _ := setupIntegration(t)
 		cluster := &multigresv1alpha1.MultigresCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "enter-lite", Namespace: testNamespace},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				Cells: []multigresv1alpha1.CellConfig{{Name: "z1", ZoneID: "us-central1-a"}},
+			},
 		}
 		setTestPostgresPasswordSecretRef(cluster)
 		if err := k8sClient.Create(t.Context(), cluster); err != nil {
@@ -239,26 +249,39 @@ func TestMultigresCluster_Validation(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected entering lite mode after creation to be rejected")
 		}
-		if !strings.Contains(err.Error(), "mode can only be set to lite when the cluster is created") {
+		if !strings.Contains(
+			err.Error(),
+			"mode is immutable and can only be set when the cluster is created",
+		) {
 			t.Errorf("Expected CEL transition error, got: %v", err)
 		}
 	})
 
-	// Clearing Lite mode after creation is allowed.
-	t.Run("Leaving Lite Mode (Should Pass)", func(t *testing.T) {
+	// A cluster cannot leave Lite mode after creation.
+	t.Run("Leaving Lite Mode (Should Fail)", func(t *testing.T) {
 		t.Parallel()
 		k8sClient, _ := setupIntegration(t)
 		cluster := &multigresv1alpha1.MultigresCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "leave-lite", Namespace: testNamespace},
-			Spec:       multigresv1alpha1.MultigresClusterSpec{Mode: multigresv1alpha1.ModeLite},
+			Spec: multigresv1alpha1.MultigresClusterSpec{
+				Mode:  multigresv1alpha1.ModeLite,
+				Cells: []multigresv1alpha1.CellConfig{{Name: "z1", ZoneID: "us-central1-a"}},
+			},
 		}
 		setTestPostgresPasswordSecretRef(cluster)
 		if err := k8sClient.Create(t.Context(), cluster); err != nil {
 			t.Fatalf("Expected initial cluster to be accepted, got: %v", err)
 		}
 
-		if err := updateClusterMode(t, k8sClient, cluster, ""); err != nil {
-			t.Fatalf("Expected leaving lite mode to be accepted, got: %v", err)
+		err := updateClusterMode(t, k8sClient, cluster, "")
+		if err == nil {
+			t.Fatal("Expected leaving lite mode after creation to be rejected")
+		}
+		if !strings.Contains(
+			err.Error(),
+			"mode is immutable and can only be set when the cluster is created",
+		) {
+			t.Errorf("Expected CEL transition error, got: %v", err)
 		}
 	})
 }

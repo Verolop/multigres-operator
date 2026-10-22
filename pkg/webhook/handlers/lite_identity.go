@@ -115,9 +115,7 @@ func usesResolvedShardTemplate(cluster *multigresv1alpha1.MultigresCluster, name
 	for _, db := range cluster.Spec.Databases {
 		for _, tg := range db.TableGroups {
 			for _, shard := range tg.Shards {
-				if shard.Spec != nil {
-					continue
-				}
+				// Inline specs overlay the template, so they consume it too.
 				ref := shard.ShardTemplate
 				if ref == "" {
 					ref = cluster.Spec.TemplateDefaults.ShardTemplate

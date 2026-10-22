@@ -171,3 +171,62 @@ func TestLiteRejectsFallbackTemplateDeletion(t *testing.T) {
 	_, err := validator.ValidateDelete(t.Context(), tpl)
 	require.ErrorContains(t, err, "identity is immutable")
 }
+
+// Inline shard fields overlay the effective template; they do not opt out of
+// template inheritance. Admission must check both fallback and global defaults.
+func TestLiteInlineTemplateConsumers(t *testing.T) {
+	for _, templateName := range []string{"default", "global"} {
+		operations := []string{"update"}
+		// Named global templates must exist before the cluster can reference them.
+		if templateName == "default" {
+			operations = append(operations, "create")
+		}
+		for _, operation := range operations {
+			for _, poolName := range []string{"main", "other"} {
+				t.Run(templateName+"/"+operation+"/"+poolName, func(t *testing.T) {
+					cluster := identityCluster()
+					shard := &cluster.Spec.Databases[0].TableGroups[0].Shards[0]
+					shard.ShardTemplate = ""
+					shard.Spec = &multigresv1alpha1.ShardInlineSpec{
+						Pools: identityTemplate("unused", "main").Spec.Pools,
+					}
+					if templateName == "global" {
+						cluster.Spec.TemplateDefaults.ShardTemplate = "global"
+					}
+					objects := []client.Object{cluster}
+					old := identityTemplate(templateName, "main")
+					if operation == "update" {
+						objects = append(objects, old)
+					}
+					incoming := identityTemplate(templateName, poolName)
+					pool := incoming.Spec.Pools[multigresv1alpha1.PoolName(poolName)]
+					pool.Storage.Size = "5Gi"
+					incoming.Spec.Pools[multigresv1alpha1.PoolName(poolName)] = pool
+					validator := NewTemplateValidator(identityClient(objects...), "ShardTemplate")
+					var err error
+					if operation == "create" {
+						_, err = validator.ValidateCreate(t.Context(), incoming)
+					} else {
+						_, err = validator.ValidateUpdate(t.Context(), old, incoming)
+					}
+					if poolName == "main" {
+						require.NoError(t, err)
+					} else {
+						require.ErrorContains(t, err, "exactly one resolved pool")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLiteInlineRejectsInheritedPoolDeletion(t *testing.T) {
+	cluster := identityCluster()
+	shard := &cluster.Spec.Databases[0].TableGroups[0].Shards[0]
+	shard.ShardTemplate = ""
+	shard.Spec = &multigresv1alpha1.ShardInlineSpec{}
+	tpl := identityTemplate("default", "main")
+	validator := NewTemplateValidator(identityClient(cluster, tpl), "ShardTemplate")
+	_, err := validator.ValidateDelete(t.Context(), tpl)
+	require.ErrorContains(t, err, "identity is immutable")
+}
