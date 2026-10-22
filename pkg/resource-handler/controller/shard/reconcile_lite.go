@@ -2,9 +2,13 @@ package shard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/multigres/multigres/go/common/topoclient"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -98,7 +102,11 @@ func (r *ShardReconciler) reconcileLite(
 		return ctrl.Result{}, err
 	}
 	if !registered {
-		return ctrl.Result{RequeueAfter: topoUnavailableRequeueDelay}, nil
+		// A bootstrapped Minigres can restart from topo-database.pb on its
+		// existing data PVC. Do not let an etcd outage prevent pod recovery,
+		// but leave provisioning, rollouts and reloads until topology returns.
+		err := r.recoverLitePod(ctx, shard, poolName, cellName, poolSpec)
+		return ctrl.Result{RequeueAfter: topoUnavailableRequeueDelay}, err
 	}
 
 	pvcWait, err := r.ensureLiteDataPVC(ctx, shard, poolName, cellName, poolSpec)
@@ -170,12 +178,13 @@ func (r *ShardReconciler) registerLiteDatabase(
 
 	store, err := r.topoStore(ctx, shard)
 	if err != nil {
-		if !topo.IsTopoUnavailable(err) {
-			r.Recorder.Eventf(shard, "Warning", "TopologyError",
-				"Failed to connect to topology store: %v", err)
+		if isLiteTopoUnavailable(err) {
+			logger.Info("Topology server unavailable; requeueing", "error", err)
+			return false, nil
 		}
-		logger.Error(err, "Failed to get topo store, cannot register database")
-		return false, nil
+		r.Recorder.Eventf(shard, "Warning", "TopologyError",
+			"Failed to connect to topology store: %v", err)
+		return false, fmt.Errorf("open topology for Lite database registration: %w", err)
 	}
 	defer func() { _ = store.Close() }()
 
@@ -187,13 +196,59 @@ func (r *ShardReconciler) registerLiteDatabase(
 		ctx, store, r.Recorder, shard, dbConfig, topo.CollectCells(shard),
 		shard.Spec.Backup, shard.Spec.DurabilityPolicy,
 	); err != nil {
-		if topo.IsTopoUnavailable(err) {
+		if isLiteTopoUnavailable(err) {
 			logger.Info("Topology server unavailable; requeueing", "error", err.Error())
 			return false, nil
 		}
 		return false, err
 	}
 	return true, nil
+}
+
+// isLiteTopoUnavailable also recognizes the deadline reached when etcd accepts
+// a connection but cannot answer. Configuration and permission errors must not
+// authorize recovery using cached topology.
+func isLiteTopoUnavailable(err error) bool {
+	return topo.IsTopoUnavailable(err) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, &topoclient.TopoError{Code: topoclient.Timeout}) ||
+		grpcstatus.Code(err) == codes.Unavailable || grpcstatus.Code(err) == codes.DeadlineExceeded
+}
+
+// recoverLitePod only replaces missing or terminal pods using an existing data
+// volume. The volume's existence is not proof of bootstrap: Minigres itself must
+// find and validate its cached database record, and first bootstrap still needs
+// etcd. Never replace a live pod for spec drift or resize during an outage.
+func (r *ShardReconciler) recoverLitePod(
+	ctx context.Context,
+	shard *multigresv1alpha1.Shard,
+	poolName, cellName string,
+	poolSpec multigresv1alpha1.PoolSpec,
+) error {
+	pvc := &corev1.PersistentVolumeClaim{}
+	key := client.ObjectKey{
+		Namespace: shard.Namespace,
+		Name:      BuildPoolDataPVCName(shard, poolName, cellName, 0),
+	}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // A fresh deployment must first register in topology.
+		}
+		return fmt.Errorf("read Lite recovery PVC: %w", err)
+	}
+	if !pvc.DeletionTimestamp.IsZero() || pvc.Status.Phase != corev1.ClaimBound {
+		return nil
+	}
+
+	pod := &corev1.Pod{}
+	key.Name = BuildPoolPodName(shard, poolName, cellName, 0)
+	if err := r.Get(ctx, key, pod); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("read Lite recovery pod: %w", err)
+		}
+	} else if pod.Status.Phase != corev1.PodFailed && pod.Status.Phase != corev1.PodSucceeded {
+		return nil
+	}
+	return r.ensureLitePod(ctx, shard, poolName, cellName, poolSpec)
 }
 
 // ensureLiteDataPVC creates or expands the Lite pod's data PVC. It never
@@ -368,7 +423,7 @@ func (r *ShardReconciler) reconcileLiteReload(
 	}
 	store, err := r.topoStore(ctx, shard)
 	if err != nil {
-		if topo.IsTopoUnavailable(err) {
+		if isLiteTopoUnavailable(err) {
 			return reloadRetryDelay, nil
 		}
 		return 0, fmt.Errorf("open topology for Lite config reload: %w", err)

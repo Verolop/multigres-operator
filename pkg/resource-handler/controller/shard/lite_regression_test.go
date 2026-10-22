@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -206,21 +207,24 @@ func TestLiteFilesystemResizeReplacesReadyPod(t *testing.T) {
 	}
 }
 
-func TestLiteInternalTLSConfiguresGatewayClient(t *testing.T) {
+func TestLiteInternalTLSOnlyConfiguresAdminServer(t *testing.T) {
 	shard := newTestLiteShard()
 	shard.Spec.InternalTLS = &multigresv1alpha1.InternalTLSConfig{Enabled: ptr.To(true)}
 	pod, err := BuildLitePod(shard, "main", "z1", newTestPoolSpec(), testScheme())
 	require.NoError(t, err)
 	c := pod.Spec.Containers[0]
 	for flag, value := range map[string]string{
-		"--multipooler-grpc-cert":        ShardTLSCertFile,
-		"--multipooler-grpc-key":         ShardTLSKeyFile,
-		"--multipooler-grpc-ca":          ShardTLSCAFile,
-		"--multipooler-grpc-server-name": multigresv1alpha1.ComponentCertCommonName(multigresv1alpha1.ComponentMultiPoolerTLS, shard.Labels[metadata.LabelMultigresCluster], shard.Namespace),
+		"--grpc-cert":      ShardTLSCertFile,
+		"--grpc-key":       ShardTLSKeyFile,
+		"--grpc-ca":        ShardTLSCAFile,
+		"--grpc-server-ca": ShardTLSCAFile,
 	} {
 		assertFlagValue(t, c.Args, flag, value)
 	}
-	assertContainsFlag(t, c.Args, "--multipooler-grpc-require-tls")
+	for _, arg := range c.Args {
+		require.False(t, strings.HasPrefix(arg, "--multipooler-grpc-"),
+			"Minigres rejects remote-pooler TLS flags: %s", arg)
+	}
 	assertReadOnlyVolumeMount(t, c.VolumeMounts, ShardTLSVolumeName, ShardTLSMountPath)
 }
 

@@ -6,6 +6,7 @@ package shard_test
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,12 +125,19 @@ func TestReconcileLite(t *testing.T) {
 	shard := newLiteTestShard("lite-shard", clusterName)
 
 	store, topoFactory := liteTopo(t)
+	var topoOffline atomic.Bool
+	outageFactory := func(s *multigresv1alpha1.Shard) (topoclient.Store, error) {
+		if topoOffline.Load() {
+			return nil, topoclient.NewError(topoclient.Timeout, "/databases/testdb")
+		}
+		return topoFactory(s)
+	}
 	if err := (&shardcontroller.ShardReconciler{
 		Client:          mgr.GetClient(),
 		APIReader:       mgr.GetAPIReader(),
 		Scheme:          mgr.GetScheme(),
 		Recorder:        mgr.GetEventRecorderFor("shard-controller"),
-		CreateTopoStore: topoFactory,
+		CreateTopoStore: outageFactory,
 	}).SetupWithManager(mgr, controller.Options{SkipNameValidation: ptr.To(true)}); err != nil {
 		t.Fatalf("Failed to create controller: %v", err)
 	}
@@ -188,7 +196,14 @@ func TestReconcileLite(t *testing.T) {
 	require.NoError(t, k8sClient.List(ctx, services, client.InNamespace("default"), byCluster))
 	require.Empty(t, services.Items, "Lite shard must not have multiorch or headless Services")
 
-	// A kubelet eviction must recover even though the desired hash is unchanged.
+	// Model a bound volume: envtest has no storage controller. Minigres keeps
+	// topo-database.pb in this volume alongside its PostgreSQL data.
+	pvc.Status.Phase = corev1.ClaimBound
+	require.NoError(t, k8sClient.Status().Update(ctx, pvc))
+	topoOffline.Store(true)
+
+	// A kubelet eviction must recover while etcd is unreachable, even though
+	// the desired hash is unchanged.
 	evictedUID := pod.UID
 	evictedHash := pod.Annotations[metadata.AnnotationSpecHash]
 	pod.Status.Phase = corev1.PodFailed
@@ -198,6 +213,26 @@ func TestReconcileLite(t *testing.T) {
 		return k8sClient.Get(ctx, podKey, pod) == nil && pod.UID != evictedUID &&
 			pod.Annotations[metadata.AnnotationSpecHash] == evictedHash
 	}, 30*time.Second, 200*time.Millisecond, "evicted Lite pod was not replaced")
+
+	// A deleted pod must also be recreated while etcd remains down, retaining
+	// the same data PVC. This exercises the full controller, not just a builder.
+	deletedUID := pod.UID
+	require.NoError(t, k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)))
+	require.Eventually(t, func() bool {
+		return k8sClient.Get(ctx, podKey, pod) == nil && pod.UID != deletedUID &&
+			pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName == pvcKey.Name
+	}, 30*time.Second, 200*time.Millisecond, "Lite pod was not recreated during topology outage")
+	require.NoError(t, k8sClient.Get(ctx, pvcKey, pvc))
+	require.Equal(t, originalPVCUID, pvc.UID)
+
+	// Registration resumes after recovery. Removing this memory-topology
+	// record makes the retry observable without changing the Shard spec.
+	require.NoError(t, store.DeleteDatabase(ctx, "testdb", true))
+	topoOffline.Store(false)
+	require.Eventually(t, func() bool {
+		_, err := store.GetDatabase(ctx, "testdb")
+		return err == nil
+	}, 30*time.Second, 200*time.Millisecond, "Lite topology registration did not resume")
 
 	// A CSI filesystem-resize condition must trigger replacement even when
 	// the desired pod hash is unchanged.
