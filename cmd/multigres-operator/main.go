@@ -594,20 +594,15 @@ func main() {
 // without a cluster; main converts a non-nil result into os.Exit(1) before the
 // manager is constructed.
 //
-// It guards only the --namespace laptop mode. A cluster-wide out-of-cluster
-// run is guarded separately, after the config is loaded, by
-// deployedOperatorConflict: whether that run is safe depends on the cluster,
-// not on the flags.
+// It guards only the flag combinations of the --namespace laptop mode. Every
+// check that depends on the cluster, which namespace the deployed operator
+// runs in included, is preflight's, after the config is loaded.
 func laptopModeStartupError(
 	laptopNS string,
 	leaderElection, webhooks bool,
 ) error {
 	if laptopNS == "" {
 		return nil
-	}
-	if laptopNS == deployedOperatorNamespace {
-		return errors.New("--namespace=" + laptopNS + " is the deployed operator's own " +
-			"namespace; claim the namespace of the cluster you are working on instead")
 	}
 	if leaderElection {
 		return errors.New("--namespace cannot be combined with --leader-elect=true: " +

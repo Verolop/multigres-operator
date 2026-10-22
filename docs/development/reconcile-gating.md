@@ -201,15 +201,17 @@ any watch starts. A misconfigured run exits `1` with a reason rather than
 racing the deployed operator:
 
 0. **An out-of-cluster run without `--namespace` on a cluster where an operator
-   has ever been deployed** is refused. Before starting, the process reads the
-   deployed operator's leader-election lease (`multigres-operator.multigres.com`
-   in the `multigres-operator` namespace). Only its absence, as on a bare Kind
-   cluster, lets the run start cluster-wide. Existence alone refuses, whoever
-   holds it and however stale, because a liveness test would pass during every
-   rollout while the lease sits released between leaders. After removing a
-   deployed operator without deleting its namespace, delete the lease to run
-   cluster-wide again. A read that fails for any reason other than NotFound also
-   refuses. This check runs in every build, stock or `kubedial`.
+   has ever been deployed** is refused. Before starting, the process lists the
+   deployed operator's leader-election lease (`multigres-operator.multigres.com`)
+   across all namespaces, since the install namespace is the installer's choice.
+   Only its absence everywhere, as on a bare Kind cluster, lets the run start
+   cluster-wide. Existence alone refuses, whoever holds it and however stale,
+   because a liveness test would pass during every rollout while the lease sits
+   released between leaders. After removing a deployed operator without deleting
+   its namespace, delete the lease to run cluster-wide again. A list that fails
+   for any reason, RBAC included, also refuses, in this mode and in laptop mode
+   alike, so running either needs cluster-wide `list` on `leases`. This check
+   runs in every build, stock or `kubedial`.
 1. **`--leader-elect=true` with `--namespace`**: refused. Laptop mode has no
    business holding the leader-election lease; doing so would take the lease
    from the deployed operator and shut it down.
@@ -220,8 +222,10 @@ racing the deployed operator:
    webhooks would fight the deployed operator over admission configuration no
    matter where the second process runs. Laptop mode always requires
    `--webhook-enable=false`.
-3. **The claimed namespace is `multigres-operator`**: refused. That is the
-   deployed operator's own namespace, never a cluster's.
+3. **The claimed namespace holds the deployed operator's lease**: refused. That
+   is the deployed operator's own namespace, never a cluster's, and it is found
+   by the same lease search as guard 0 rather than assumed to be
+   `multigres-operator`.
 4. **The claimed namespace does not exist or is not labelled
    `multigres.com/reconcile=disabled`**: refused. This is the claim check: the
    laptop operator reads the namespace before starting, which also rejects a

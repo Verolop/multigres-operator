@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
-	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,28 +21,32 @@ func outOfCluster() bool {
 }
 
 // preflight refuses configurations that would put this process on objects a
-// deployed operator is also reconciling. Without --namespace, an out-of-cluster
-// run is checked against the deployed operator's lease; with it, the claimed
-// namespace must exist and already carry the label that keeps the deployed
-// operator out, or the two fight over the same objects (the applied-images
-// oscillation). The Get is also what rejects a malformed namespace name.
+// deployed operator is also reconciling. It finds the deployed operator by its
+// leader-election lease in any namespace. Without --namespace, an out-of-cluster
+// run is refused if one exists; with it, the claimed namespace must not be the
+// deployed operator's own, and must exist and already carry the label that
+// keeps the deployed operator out, or the two fight over the same objects (the
+// applied-images oscillation). The Get is also what rejects a malformed
+// namespace name.
 func preflight(
 	ctx context.Context,
 	r client.Reader,
 	laptopNS string,
 	outOfCluster bool,
 ) error {
+	if laptopNS == "" && !outOfCluster {
+		return nil
+	}
+	deployed, err := deployedOperatorNamespaces(ctx, r)
+	if err != nil {
+		return err
+	}
 	if laptopNS == "" {
-		if !outOfCluster {
-			return nil
-		}
-		var lease coordinationv1.Lease
-		getErr := r.Get(
-			ctx,
-			client.ObjectKey{Namespace: deployedOperatorNamespace, Name: leaderElectionID},
-			&lease,
-		)
-		return deployedOperatorConflict(getErr)
+		return deployedOperatorConflict(deployed)
+	}
+	if slices.Contains(deployed, laptopNS) {
+		return fmt.Errorf("--namespace=%s is the deployed operator's own namespace; "+
+			"claim the namespace of the cluster you are working on instead", laptopNS)
 	}
 	var ns corev1.Namespace
 	if err := r.Get(ctx, client.ObjectKey{Name: laptopNS}, &ns); err != nil {

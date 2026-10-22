@@ -1,41 +1,33 @@
 package main
 
 import (
-	"errors"
 	"strings"
 	"testing"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestDeployedOperatorConflict(t *testing.T) {
-	leaseGR := schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}
-
 	tests := map[string]struct {
-		getErr        error
+		namespaces    []string
 		wantErrSubstr string
 	}{
-		"no lease, as on a bare Kind cluster, allows the run": {
-			getErr: apierrors.NewNotFound(leaseGR, leaderElectionID),
+		"no lease, as on a bare Kind cluster, allows the run": {},
+		"a lease in the default install namespace refuses": {
+			namespaces:    []string{"multigres-operator"},
+			wantErrSubstr: "namespace(s) multigres-operator,",
 		},
-		"an existing lease refuses, whoever holds it and however stale": {
-			getErr:        nil,
-			wantErrSubstr: "exists",
+		"a lease in any other namespace refuses, naming it": {
+			namespaces:    []string{"mgo"},
+			wantErrSubstr: "namespace(s) mgo,",
 		},
-		"a forbidden read refuses": {
-			getErr:        apierrors.NewForbidden(leaseGR, leaderElectionID, errors.New("rbac")),
-			wantErrSubstr: "cannot read lease",
-		},
-		"any other read error refuses": {
-			getErr:        errors.New("connection refused"),
-			wantErrSubstr: "cannot read lease",
+		"several leases are all named": {
+			namespaces:    []string{"a", "b"},
+			wantErrSubstr: "namespace(s) a, b,",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := deployedOperatorConflict(tc.getErr)
+			err := deployedOperatorConflict(tc.namespaces)
 			if tc.wantErrSubstr == "" {
 				if err != nil {
 					t.Fatalf("deployedOperatorConflict() = %v, want nil", err)

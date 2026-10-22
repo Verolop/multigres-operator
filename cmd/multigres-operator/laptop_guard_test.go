@@ -20,10 +20,6 @@ func TestLaptopModeStartupError(t *testing.T) {
 			leaderElect: true,
 			webhooks:    true,
 		},
-		"claiming the deployed operator's own namespace is refused": {
-			laptopNS:      deployedOperatorNamespace,
-			wantErrSubstr: "deployed operator's own",
-		},
 		"laptop mode with leader election is refused": {
 			laptopNS:      "dev",
 			leaderElect:   true,
