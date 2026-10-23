@@ -96,6 +96,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - coordination.k8s.io
+  resourceNames:
+  - multigres-operator.multigres.com
+  resources:
+  - leases
+  verbs:
+  - list
+- apiGroups:
   - multigres.com
   resources:
   - cells

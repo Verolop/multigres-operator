@@ -210,8 +210,15 @@ racing the deployed operator:
    released between leaders. After removing a deployed operator without deleting
    its namespace, delete the lease to run cluster-wide again. A list that fails
    for any reason, RBAC included, also refuses, in this mode and in laptop mode
-   alike, so running either needs cluster-wide `list` on `leases`. This check
-   runs in every build, stock or `kubedial`.
+   alike, so running either needs `list` on the `multigres-operator.multigres.com`
+   lease across all namespaces. The manager ClusterRole grants it for this
+   reason, scoped by `resourceNames` to that one lease (the search's
+   `metadata.name` field selector is what lets Kubernetes authorise a
+   cluster-wide list against a named resource; a marker in
+   `api/v1alpha1/multigrescluster_types.go`), so a laptop process that
+   impersonates the deployed operator's ServiceAccount passes the check with
+   the operator's own permissions. This check runs in every build, stock or
+   `kubedial`.
 1. **`--leader-elect=true` with `--namespace`**: refused. Laptop mode has no
    business holding the leader-election lease; doing so would take the lease
    from the deployed operator and shut it down.
